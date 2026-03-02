@@ -1,0 +1,175 @@
+# Agent Registry — loaded by registry/loader.py
+# Each entry defines an agent's identity, capabilities, and constraints.
+# Phase 1D: Supervisor uses this to assemble teams dynamically.
+# Phase 2: Add DeepWorkAgent, MarketScanAgent, QA Auditor, Architect, Backlog, DevOps
+
+agents:
+  - name: SupervisorAgent
+    role: supervisor
+    description: >
+      Reads the SoT and the agent registry, creates a TaskDAG assigning
+      the right agents to each task, and monitors execution.
+    capabilities:
+      - team_formation
+      - task_dag_creation
+      - merge_outputs
+    required_inputs:
+      - current_phase
+      - open_questions
+      - requirements
+    output_schema: TaskDAG
+    prompt_template_path: prompts/supervisor.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 0.10
+
+  - name: DiscoveryAgent
+    role: analyst
+    description: >
+      LLM-driven discovery agent (Phase 4). Uses coverage-score based questioning
+      across 11 requirement categories. Drains BRD/PRD/SOW gap follow-up questions
+      first, then switches to coverage-driven Qs. Gates at threshold 0.7.
+    capabilities:
+      - requirements_elicitation
+      - gap_detection
+      - coverage_scoring
+    required_inputs:
+      - last_user_message
+      - requirements
+      - open_questions
+      - coverage_scores
+      - followup_questions
+    output_schema: DiscoveryPatch
+    prompt_template_path: prompts/discovery.j2
+    allowed_tools: []
+    limits:
+      max_steps: 50
+      max_tool_calls: 0
+      budget_usd: 2.00
+
+  - name: PRDAgent
+    role: product_manager
+    description: >
+      LLM-driven PRD agent (Phase 4). Generates structured project scope and PRD
+      narrative from gathered requirements. Supports rejection-feedback re-generation
+      loop: when rejection_feedback is set, incorporates reviewer comments.
+    capabilities:
+      - scope_generation
+      - prd_generation
+      - acceptance_criteria
+      - rejection_feedback_loop
+    required_inputs:
+      - requirements
+      - gathered_requirements
+      - scope
+    output_schema: PRDPatch
+    prompt_template_path: prompts/prd.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 1.00
+
+  - name: CommercialAgent
+    role: engagement_manager
+    description: >
+      LLM-driven commercials agent (Phase 4). Generates commercial proposal with
+      pricing model (T&M/Fixed/Hybrid), milestones, and team composition. Runs
+      between PRD approval and SOW drafting.
+    capabilities:
+      - commercial_proposal
+      - milestone_planning
+      - team_composition
+      - rejection_feedback_loop
+    required_inputs:
+      - scope
+      - requirements
+    output_schema: CommercialsPatch
+    prompt_template_path: prompts/commercials.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 1.00
+
+  - name: SOWAgent
+    role: engagement_manager
+    description: >
+      LLM-driven SOW agent (Phase 4). Generates Statement of Work sections
+      (9 required sections) from scope + commercials + requirements.
+      Runs a legal guard check. Supports rejection-feedback re-generation.
+    capabilities:
+      - sow_generation
+      - legal_guard_check
+      - rejection_feedback_loop
+    required_inputs:
+      - scope
+      - commercial_model
+      - milestones
+      - requirements
+    output_schema: SOWPatch
+    prompt_template_path: prompts/sow.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 1.00
+
+# ── Phase 2 agents ────────────────────────────────────────────────
+
+  - name: DeepWorkAgent
+    role: researcher
+    description: >
+      Bounded plan-act-observe research loop. Gathers findings from tools,
+      produces structured DeepWorkOutput with sot_patch. Respects deep_mode
+      policy (off | suggest | auto).
+    capabilities:
+      - deep_research
+      - long_horizon
+      - market_analysis
+    required_inputs:
+      - requirements
+      - open_questions
+      - last_user_message
+    output_schema: DeepWorkOutput
+    prompt_template_path: prompts/deep_work.j2
+    allowed_tools:
+      - web_search
+      - fetch_url
+      - read_file
+    limits:
+      max_steps: 5
+      max_tool_calls: 10
+      budget_usd: 2.00
+
+  - name: MarketScanAgent
+    role: market_analyst
+    description: >
+      Evaluates buy/build/hybrid options using a deterministic scoring matrix
+      enriched with web search findings. Outputs market_eval section in SoT.
+      Triggers an approval gate when recommendation is BUY or HYBRID.
+    capabilities:
+      - market_evaluation
+      - vendor_comparison
+      - scoring_matrix
+    required_inputs:
+      - requirements
+      - assumptions
+      - last_user_message
+    output_schema: MarketEvalPatch
+    prompt_template_path: prompts/market_scan.j2
+    allowed_tools:
+      - web_search
+      - fetch_url
+    limits:
+      max_steps: 3
+      max_tool_calls: 6
+      budget_usd: 1.00
+
+# ── Phase 2 stubs (future) ────────────────────────────────────────
+#  - name: QAAuditorAgent
+#  - name: ArchitectAgent
+#  - name: BacklogAgent
+#  - name: DevOpsAgent

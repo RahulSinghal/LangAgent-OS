@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentOS</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">AO</div>
+          <div class="title">
+            <div class="name">AgentOS</div>
+            <div class="sub">FastAPI + LangGraph</div>
+          </div>
+        </div>
+        <div class="badge" id="modeBadge" title="Agent mode">Mode: —</div>
+        <div class="controls">
+          <button id="btnOpenDashboard" class="btn secondary">Dashboard</button>
+          <button id="btnNewProject" class="btn secondary">Create project</button>
+        </div>
+      </header>
+
+      <main class="main">
+        <section class="dashboard" id="dashboardView">
+          <div class="dashHeader">
+            <div class="dashTitle">
+              <div class="name">Projects</div>
+              <div class="subtle">Load a project to open chat and artifacts.</div>
+            </div>
+            <div class="dashActions">
+              <button id="btnRefreshDashboard" class="btn secondary">Refresh</button>
+            </div>
+          </div>
+          <div class="dashBody">
+            <div id="dashboardTable" class="dashTable">Loading…</div>
+          </div>
+        </section>
+
+        <section class="chat hidden" id="chatView">
+          <div class="chatHeader">
+            <div class="chatMeta">
+              <div class="metaRow">
+                <span class="mono" id="projectLabel">project: —</span>
+                <span class="badge" id="runStatus">idle</span>
+                <span class="mono" id="runIdLabel">run: —</span>
+                <span class="mono" id="nodeLabel">node: —</span>
+              </div>
+              <div class="metaRow subtle">
+                <span class="mono" id="phaseLabel">phase: —</span>
+                <span class="mono" id="approvalLabel">approval: —</span>
+              </div>
+              <div class="metaRow">
+                <div id="workflowStepper" class="stepper" aria-label="Workflow progress"></div>
+              </div>
+            </div>
+            <div class="chatActions">
+              <button id="btnToggleSide" class="btn secondary">Hide panel</button>
+              <button id="btnBackToDashboard" class="btn secondary">Back</button>
+              <button id="btnLoadHistory" class="btn secondary">Load history</button>
+              <button id="btnRefresh" class="btn secondary">Refresh</button>
+            </div>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <div class="composer">
+            <input id="fileInput" type="file" class="hidden" />
+            <button id="btnAttach" class="btn icon" title="Attach document/image">+</button>
+            <div class="composerBody">
+              <textarea
+                id="userMessage"
+                rows="2"
+                placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+              ></textarea>
+              <div id="attachmentChip" class="chip hidden"></div>
+            </div>
+            <button id="btnSend" class="btn primary">Send</button>
+          </div>
+        </section>
+
+        <aside class="side hidden" id="sidePanel">
+          <section class="card">
+            <div class="cardTitle">Next question</div>
+            <div id="nextQuestion" class="cardBody subtle">—</div>
+            <div class="cardActions">
+              <button id="btnUseQuestion" class="btn secondary">Copy into reply</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="cardTitle">Artifacts</div>
+            <div id="artifacts" class="cardBody subtle">—</div>
+          </section>
+
+          <section class="card">
+            <div class="cardTitle">Approval</div>
+            <div class="cardBody">
+              <div id="pendingApprovals" class="cardBody subtle">—</div>
+              <label class="field block">
+                <span>Comments (optional)</span>
+                <textarea id="approvalComments" rows="3" placeholder="Reviewer feedback…"></textarea>
+              </label>
+              <div class="row">
+                <button id="btnApprove" class="btn ok">Approve</button>
+                <button id="btnReject" class="btn danger">Reject</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="cardTitle">Document text (from upload)</div>
+            <div class="cardBody">
+              <textarea
+                id="documentText"
+                rows="8"
+                placeholder="When you attach a document, extracted text lands here and is sent with the next message."
+              ></textarea>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/ui/app.js?v=20260302"></script>
+  </body>
+</html>
