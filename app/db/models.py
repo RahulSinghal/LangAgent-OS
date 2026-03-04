@@ -617,6 +617,42 @@ class ArtifactLintReport(Base):
         return f"<ArtifactLintReport id={self.id} artifact={self.artifact_id} passed={self.passed}>"
 
 
+class ComponentStore(Base):
+    """Cross-project knowledge store — reusable patterns, templates, and decisions.
+
+    Populated automatically when a project completes (end_node auto-extracts
+    requirements, decisions, risks, and assumptions).  Retrieved at intake to
+    pre-populate agent prompts with relevant institutional knowledge.
+
+    component_type: "requirement_pattern" | "architecture_decision" |
+                    "risk_pattern" | "assumption" | "sow_template" | "prd_section"
+    category:       free-form domain tag, e.g. "auth", "payments", "saas"
+    tags_json:      list[str] — keyword tags used for similarity retrieval
+    content:        full text / JSON representation of the pattern
+    source:         "auto" (extracted by end_node) | "manual" (via API)
+    usage_count:    incremented each time this component is retrieved
+    """
+    __tablename__ = "component_store"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    component_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="general", index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+    usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<ComponentStore id={self.id} type={self.component_type!r} name={self.name!r}>"
+
+
 class RunMetrics(Base):
     """Aggregated cost, token, and latency counters for a completed run."""
     __tablename__ = "run_metrics"

@@ -31,6 +31,7 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_policies import router as policies_router
 from app.api.routes_governance import router as governance_router
 from app.api.routes_eval_report import router as eval_report_router
+from app.api.routes_memory import router as memory_router
 
 logger = structlog.get_logger(__name__)
 
@@ -111,6 +112,9 @@ def create_app() -> FastAPI:
 
     # Eval report
     app.include_router(eval_report_router, prefix=settings.API_PREFIX)
+
+    # Cross-project memory
+    app.include_router(memory_router, prefix=settings.API_PREFIX)
 
     return app
 

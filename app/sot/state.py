@@ -246,6 +246,11 @@ class ProjectState(BaseModel):
     coding_plan: list[MilestoneItem] = Field(default_factory=list)
     current_milestone_index: int = 0
 
+    # ── Cross-project memory (read-only for agents) ────────────────────────────
+    # Populated by intake_normalize from ComponentStore; agents may reference
+    # this in their prompts to leverage institutional knowledge from past projects.
+    past_context: list[dict[str, Any]] = Field(default_factory=list)
+
     def model_dump_jsonb(self) -> dict[str, Any]:
         """Serialize to a JSONB-safe dict (all values JSON-serialisable)."""
         return self.model_dump(mode="json")
