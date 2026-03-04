@@ -375,6 +375,7 @@ async function refreshContext() {
   if (projectId) {
     try {
       const g = await api(`/projects/${projectId}/state_graph`, { method: "GET" });
+      window.__lastGraph = g;
       renderWorkflowStepper(g);
     } catch {
       // ignore
@@ -465,6 +466,201 @@ function renderWorkflowStepper(graph) {
 
     box.appendChild(div);
   }
+
+  renderWorkflowDiagram(graph);
+}
+
+// Node → phase mapping for gate detection
+const _GATE_PHASE_MAP = {
+  market_eval_gate:  "market_eval",
+  prd_gate:          "prd",
+  commercials_gate:  "commercials",
+  sow_gate:          "sow",
+  coding_plan_gate:  "coding",
+  milestone_gate:    "milestone",
+};
+
+// Phases with their display labels and whether they have a gate
+const _PHASE_CONFIG = [
+  { id: "init",        label: "INIT",      hasGate: false },
+  { id: "discovery",   label: "DISCOVERY", hasGate: false },
+  { id: "market_eval", label: "MKT EVAL",  hasGate: true  },
+  { id: "prd",         label: "PRD",       hasGate: true  },
+  { id: "commercials", label: "COMMERCIALS",hasGate: true  },
+  { id: "sow",         label: "SOW",       hasGate: true  },
+  { id: "coding",      label: "CODING",    hasGate: true  },
+  { id: "milestone",   label: "MILESTONE", hasGate: true  },
+  { id: "completed",   label: "DONE",      hasGate: false },
+];
+
+function renderWorkflowDiagram(graph) {
+  const container = document.getElementById("workflowDiagram");
+  if (!container || container.classList.contains("hidden")) return;
+
+  const phases = graph?.phases || [];
+  const details = graph?.details || {};
+  const currentNode = details?.run?.current_node || "";
+  const rejectionFeedback = details?.sot?.rejection_feedback || null;
+  const unanswered = Number(details?.sot?.unanswered_questions || 0);
+  const pendingTotal = Number(details?.approvals?.pending_total || 0);
+
+  // Status lookup by phase id
+  const statusMap = {};
+  for (const p of phases) statusMap[p.id] = p.status || "pending";
+
+  // Which phase's gate is currently the active node?
+  const activeGatePhase = _GATE_PHASE_MAP[currentNode] || null;
+
+  const N = _PHASE_CONFIG.length;
+  const W = 900;
+  // Height depends on whether any phase has gates
+  const hasGates = _PHASE_CONFIG.some(p => p.hasGate);
+  const H = hasGates ? 130 : 80;
+  const phaseY = 40;
+  const gateY = 90;
+  const labelY = H - 8;
+  const nodeR = 14;
+  const gateHalf = 9;
+
+  // Evenly spaced x positions
+  const xs = _PHASE_CONFIG.map((_, i) => Math.round(32 + i * ((W - 64) / (N - 1))));
+
+  // Color helpers
+  const COL_PASS_FILL   = "rgba(34,197,94,0.18)";
+  const COL_PASS_STROKE = "rgba(34,197,94,0.70)";
+  const COL_PASS_TEXT   = "rgba(34,197,94,0.90)";
+  const COL_CUR_FILL    = "rgba(124,92,255,0.25)";
+  const COL_CUR_STROKE  = "rgba(124,92,255,0.90)";
+  const COL_CUR_TEXT    = "rgba(255,255,255,0.95)";
+  const COL_PEND_FILL   = "rgba(15,23,48,0.50)";
+  const COL_PEND_STROKE = "rgba(255,255,255,0.18)";
+  const COL_PEND_TEXT   = "rgba(170,180,226,0.45)";
+
+  function nodeColors(st, isCurMain) {
+    if (isCurMain) return [COL_CUR_FILL, COL_CUR_STROKE, COL_CUR_TEXT];
+    if (st === "passed") return [COL_PASS_FILL, COL_PASS_STROKE, COL_PASS_TEXT];
+    if (st === "current") return [COL_PASS_FILL, COL_PASS_STROKE, COL_PASS_TEXT]; // at gate, phase done
+    return [COL_PEND_FILL, COL_PEND_STROKE, COL_PEND_TEXT];
+  }
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">`;
+
+  // Arrowhead markers
+  s += `<defs>
+    <marker id="wf-arr-p" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3z" fill="rgba(34,197,94,0.55)"/></marker>
+    <marker id="wf-arr-c" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3z" fill="rgba(124,92,255,0.75)"/></marker>
+    <marker id="wf-arr-n" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3z" fill="rgba(170,180,226,0.30)"/></marker>
+    <marker id="wf-arr-r" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3z" fill="rgba(239,68,68,0.65)"/></marker>
+  </defs>`;
+
+  // Horizontal arrows between phase nodes
+  for (let i = 0; i < N - 1; i++) {
+    const x1 = xs[i] + nodeR + 2;
+    const x2 = xs[i + 1] - nodeR - 4;
+    const st = statusMap[_PHASE_CONFIG[i].id];
+    const nst = statusMap[_PHASE_CONFIG[i + 1].id];
+    let markerId, stroke;
+    if ((st === "passed" || st === "current") && nst === "current") {
+      markerId = "wf-arr-c"; stroke = "rgba(124,92,255,0.45)";
+    } else if (st === "passed" && nst === "passed") {
+      markerId = "wf-arr-p"; stroke = "rgba(34,197,94,0.40)";
+    } else {
+      markerId = "wf-arr-n"; stroke = "rgba(170,180,226,0.18)";
+    }
+    s += `<line x1="${x1}" y1="${phaseY}" x2="${x2}" y2="${phaseY}" stroke="${stroke}" stroke-width="1.5" marker-end="url(#${markerId})"/>`;
+  }
+
+  // Vertical dashed lines from phase node down to gate diamond
+  for (let i = 0; i < N; i++) {
+    const p = _PHASE_CONFIG[i];
+    if (!p.hasGate) continue;
+    const st = statusMap[p.id];
+    const gateActive = activeGatePhase === p.id;
+    const stroke = gateActive
+      ? "rgba(124,92,255,0.55)"
+      : (st === "passed" || st === "current") ? "rgba(34,197,94,0.28)" : "rgba(170,180,226,0.12)";
+    s += `<line x1="${xs[i]}" y1="${phaseY + nodeR + 1}" x2="${xs[i]}" y2="${gateY - gateHalf - 1}" stroke="${stroke}" stroke-width="1" stroke-dasharray="3,2"/>`;
+  }
+
+  // Gate diamonds
+  for (let i = 0; i < N; i++) {
+    const p = _PHASE_CONFIG[i];
+    if (!p.hasGate) continue;
+    const x = xs[i];
+    const y = gateY;
+    const g = gateHalf;
+    const st = statusMap[p.id];
+    const gateActive = activeGatePhase === p.id;
+    let fill, stroke, textFill;
+    if (gateActive) {
+      fill = "rgba(124,92,255,0.28)"; stroke = "rgba(124,92,255,0.90)"; textFill = "rgba(255,255,255,0.90)";
+    } else if (st === "passed" || (st === "current" && !gateActive)) {
+      fill = "rgba(34,197,94,0.15)"; stroke = "rgba(34,197,94,0.55)"; textFill = "rgba(34,197,94,0.85)";
+    } else {
+      fill = "rgba(15,23,48,0.50)"; stroke = "rgba(255,255,255,0.14)"; textFill = "rgba(170,180,226,0.35)";
+    }
+    const pts = `${x},${y - g} ${x + g},${y} ${x},${y + g} ${x - g},${y}`;
+    const cls = gateActive ? "wf-gate-pulse" : "";
+    s += `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1.5" class="${cls}"/>`;
+    s += `<text x="${x}" y="${y + 3}" text-anchor="middle" font-size="8" fill="${textFill}">✓</text>`;
+  }
+
+  // Rejection loop arc (from gate back to phase node, red dashed)
+  if (rejectionFeedback && activeGatePhase) {
+    const idx = _PHASE_CONFIG.findIndex(p => p.id === activeGatePhase);
+    if (idx >= 0) {
+      const gx = xs[idx];
+      const cx = gx + 28;
+      const cy = gateY + 20;
+      s += `<path d="M ${gx + gateHalf} ${gateY} Q ${cx} ${cy} ${gx} ${phaseY + nodeR}" fill="none" stroke="rgba(239,68,68,0.55)" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#wf-arr-r)"/>`;
+      s += `<text x="${cx + 4}" y="${cy + 10}" font-size="9" fill="rgba(239,68,68,0.70)" font-family="monospace">rejected</text>`;
+    }
+  }
+
+  // Phase circles
+  for (let i = 0; i < N; i++) {
+    const p = _PHASE_CONFIG[i];
+    const x = xs[i];
+    const st = statusMap[p.id] || "pending";
+    // Main node is active when phase is "current" AND we're not sitting in its gate
+    const isCurMain = st === "current" && activeGatePhase !== p.id;
+    const [fill, stroke, textFill] = nodeColors(st, isCurMain);
+    const cls = isCurMain ? "wf-node-pulse" : "";
+    const sw = isCurMain ? "2" : "1.5";
+
+    s += `<circle cx="${x}" cy="${phaseY}" r="${nodeR}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" class="${cls}"/>`;
+
+    // Inner icon
+    if (st === "passed" || (st === "current" && activeGatePhase === p.id)) {
+      s += `<text x="${x}" y="${phaseY + 4}" text-anchor="middle" font-size="11" fill="${textFill}">✓</text>`;
+    } else if (isCurMain) {
+      s += `<circle cx="${x}" cy="${phaseY}" r="4" fill="rgba(124,92,255,0.9)" class="wf-dot-pulse"/>`;
+    } else {
+      s += `<circle cx="${x}" cy="${phaseY}" r="3" fill="${textFill}"/>`;
+    }
+
+    // Discovery unanswered Q badge
+    if (p.id === "discovery" && unanswered > 0 && st === "current") {
+      s += `<circle cx="${x + nodeR - 2}" cy="${phaseY - nodeR + 2}" r="7" fill="rgba(239,68,68,0.85)" stroke="rgba(15,23,48,0.9)" stroke-width="1"/>`;
+      s += `<text x="${x + nodeR - 2}" y="${phaseY - nodeR + 6}" text-anchor="middle" font-size="8" fill="white" font-weight="700">${unanswered}</text>`;
+    }
+
+    // Pending approvals badge on gate
+    if (p.hasGate && activeGatePhase === p.id && pendingTotal > 0) {
+      s += `<circle cx="${xs[i] + gateHalf + 2}" cy="${gateY - gateHalf - 2}" r="7" fill="rgba(239,68,68,0.85)" stroke="rgba(15,23,48,0.9)" stroke-width="1"/>`;
+      s += `<text x="${xs[i] + gateHalf + 2}" y="${gateY - gateHalf + 2}" text-anchor="middle" font-size="8" fill="white" font-weight="700">${pendingTotal}</text>`;
+    }
+
+    // Phase label
+    s += `<text x="${x}" y="${labelY}" text-anchor="middle" font-size="9" font-family="monospace" fill="${textFill}" font-weight="${(st === "current") ? "700" : "400"}">${p.label}</text>`;
+  }
+
+  s += "</svg>";
+  container.innerHTML = s;
 }
 
 async function ensureProject() {
@@ -614,6 +810,17 @@ function setup() {
     // ignore
   }
 
+  // Restore workflow diagram state
+  try {
+    const wfOpen = localStorage.getItem("agentos.workflowOpen") === "1";
+    if (wfOpen) {
+      el("workflowDiagram").classList.remove("hidden");
+      el("btnToggleWorkflow").classList.add("active");
+    }
+  } catch {
+    // ignore
+  }
+
   // Start on dashboard
   showDashboard();
 
@@ -625,6 +832,24 @@ function setup() {
       localStorage.setItem("agentos.sideCollapsed", collapsed ? "1" : "0");
     } catch {
       // ignore
+    }
+  });
+
+  el("btnToggleWorkflow").addEventListener("click", () => {
+    const diagram = el("workflowDiagram");
+    const btn = el("btnToggleWorkflow");
+    const isOpen = diagram.classList.toggle("hidden");
+    // classList.toggle returns true when class was ADDED (now hidden)
+    const nowVisible = !isOpen;
+    btn.classList.toggle("active", nowVisible);
+    try {
+      localStorage.setItem("agentos.workflowOpen", nowVisible ? "1" : "0");
+    } catch {
+      // ignore
+    }
+    // If just opened, render immediately with latest graph data
+    if (nowVisible && window.__lastGraph) {
+      renderWorkflowDiagram(window.__lastGraph);
     }
   });
 

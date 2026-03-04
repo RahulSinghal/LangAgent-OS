@@ -300,6 +300,31 @@ body {
 .cardActions { margin-top: 10px; display: flex; justify-content: flex-end; }
 .row { display: flex; gap: 10px; }
 
+/* Workflow diagram */
+.workflow-diagram {
+  padding: 10px 14px 4px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(10, 14, 30, 0.45);
+}
+
+.btn.active {
+  border-color: rgba(124, 92, 255, 0.55);
+  background: rgba(124, 92, 255, 0.14);
+  color: var(--text);
+}
+
+@keyframes wfNodePulse {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 4px rgba(124,92,255,0.7)); }
+  50%       { opacity: 0.75; filter: drop-shadow(0 0 8px rgba(124,92,255,0.9)); }
+}
+@keyframes wfDotPulse {
+  0%, 100% { r: 4; opacity: 1; }
+  50%       { r: 6; opacity: 0.7; }
+}
+.wf-node-pulse { animation: wfNodePulse 2s ease-in-out infinite; }
+.wf-gate-pulse  { animation: wfNodePulse 2s ease-in-out infinite; }
+.wf-dot-pulse   { animation: wfDotPulse 2s ease-in-out infinite; }
+
 .hidden { display: none !important; }
 
 @media (max-width: 1000px) {
