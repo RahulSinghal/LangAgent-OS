@@ -528,6 +528,7 @@ async function sendMessage() {
     window.__attachedFilename = null;
   }
 
+  await loadHistory();
   await refreshContext();
 }
 
@@ -564,7 +565,6 @@ async function resolveApproval(decision) {
 
   let approvalId = Number(window.__selectedApprovalId || 0) || null;
   if (!approvalId) throw new Error("Select a pending approval first.");
-  if (!approvalId) throw new Error("No pending approval found for this run.");
 
   const comments = el("approvalComments").value.trim() || null;
   await api(`/approvals/${approvalId}/resolve`, {
