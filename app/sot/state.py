@@ -27,6 +27,8 @@ class Phase(str, Enum):
     COMMERCIALS = "commercials"
     SOW = "sow"
     NEGOTIATION = "negotiation"
+    CODING = "coding"             # Step 4: milestone plan awaiting tech lead approval
+    MILESTONE = "milestone"       # Step 4: per-milestone code generation + review loop
     READINESS = "readiness"
     COMPLETED = "completed"
 
@@ -143,6 +145,18 @@ class DeepWorkOutput(BaseModel):
     references: list[str] = Field(default_factory=list)
 
 
+# ── Step 4: Milestone-based code generation models ────────────────────────────
+
+class MilestoneItem(BaseModel):
+    """A single coding milestone within the tech-lead-approved plan."""
+    id: str = Field(default_factory=lambda: uuid4().hex[:8])
+    name: str                                             # e.g. "Auth & User Management"
+    description: str                                      # what this milestone covers
+    stories: list[str] = Field(default_factory=list)      # backlog story refs in scope
+    status: str = "pending"                               # pending|in_progress|approved|rejected
+    code_artifact_path: str | None = None                 # path written by MilestoneCodeAgent
+
+
 # ── Phase 3 stub models ───────────────────────────────────────────────────────
 
 class DeploymentPrefs(BaseModel):
@@ -225,6 +239,10 @@ class ProjectState(BaseModel):
     # ── Phase 4: Rejection feedback for re-generation cycles ──────────────────
     # e.g. {"artifact_type": "prd", "comment": "Missing non-functional reqs"}
     rejection_feedback: dict[str, Any] | None = None
+
+    # ── Step 4: Milestone-based code generation ────────────────────────────────
+    coding_plan: list[MilestoneItem] = Field(default_factory=list)
+    current_milestone_index: int = 0
 
     def model_dump_jsonb(self) -> dict[str, Any]:
         """Serialize to a JSONB-safe dict (all values JSON-serialisable)."""

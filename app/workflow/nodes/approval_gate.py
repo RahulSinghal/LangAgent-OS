@@ -143,3 +143,105 @@ def commercials_approval_gate(state: dict) -> dict:
 def sow_approval_gate(state: dict) -> dict:
     """Gate that pauses until the SOW is approved (or re-routes on rejection)."""
     return _gate(state, "sow")
+
+
+def coding_plan_approval_gate(state: dict) -> dict:
+    """Gate that pauses until the tech lead approves the coding milestone plan."""
+    return _gate(state, "coding_plan")
+
+
+def milestone_approval_gate(state: dict) -> dict:
+    """Per-milestone tech lead review gate.
+
+    On approval:
+      - Marks the current milestone as "approved" in coding_plan.
+      - If more milestones remain: advances current_milestone_index so
+        coding_milestone_phase picks up the next one (loop continues).
+      - If all milestones done: passes through to end node.
+    On rejection:
+      - Loads reviewer comment from DB.
+      - Resets the per-milestone approval to pending.
+      - Patches rejection_feedback so MilestoneCodeAgent incorporates it.
+      - Does NOT pause — the conditional edge loops back to coding_milestone_phase.
+    """
+    sot = ProjectState(**state["sot"])
+    idx = sot.current_milestone_index
+    plan = sot.coding_plan
+
+    if not plan or idx >= len(plan):
+        # Guard: nothing in plan or index out of range — pass through.
+        return {"sot": state["sot"], "pause_reason": None, "bot_response": None}
+
+    milestone = plan[idx]
+    approval_key = f"milestone_{milestone.id}"
+    status = sot.approvals_status.get(approval_key)
+
+    # ── Approved ──────────────────────────────────────────────────────────────
+    if status == ApprovalStatus.APPROVED:
+        updated_plan = [m.model_dump() for m in plan]
+        updated_plan[idx]["status"] = "approved"
+
+        if idx + 1 < len(plan):
+            # More milestones — advance index and loop back.
+            new_sot = apply_patch(sot, {
+                "coding_plan": updated_plan,
+                "current_milestone_index": idx + 1,
+            })
+            return {
+                "sot": new_sot.model_dump_jsonb(),
+                "pause_reason": None,
+                "bot_response": (
+                    f"Milestone '{milestone.name}' approved. "
+                    f"Starting milestone {idx + 2} of {len(plan)}…"
+                ),
+            }
+        else:
+            # All milestones approved — fall through to end.
+            new_sot = apply_patch(sot, {"coding_plan": updated_plan})
+            return {
+                "sot": new_sot.model_dump_jsonb(),
+                "pause_reason": None,
+                "bot_response": "All milestones approved. Proceeding to next phase.",
+            }
+
+    # ── Rejected — load comment, patch rejection_feedback, route back ─────────
+    if status == ApprovalStatus.REJECTED:
+        comment = _load_rejection_comment(state.get("run_id"), approval_key)
+
+        updated_plan = [m.model_dump() for m in plan]
+        updated_plan[idx]["status"] = "rejected"
+
+        current_approvals = {k: v.value for k, v in sot.approvals_status.items()}
+        current_approvals[approval_key] = ApprovalStatus.PENDING.value
+
+        new_sot = apply_patch(sot, {
+            "coding_plan": updated_plan,
+            "approvals_status": current_approvals,
+            "rejection_feedback": {
+                "artifact_type": approval_key,
+                "comment": comment,
+            },
+        })
+        return {
+            "sot": new_sot.model_dump_jsonb(),
+            "pause_reason": None,
+            "bot_response": (
+                f"Milestone '{milestone.name}' rejected. "
+                "Regenerating with reviewer feedback…"
+            ),
+        }
+
+    # ── Pending (or not yet set) — pause and wait for tech lead ──────────────
+    current_approvals = {k: v.value for k, v in sot.approvals_status.items()}
+    if current_approvals.get(approval_key) != ApprovalStatus.PENDING.value:
+        current_approvals[approval_key] = ApprovalStatus.PENDING.value
+        sot = apply_patch(sot, {"approvals_status": current_approvals})
+
+    return {
+        "sot": sot.model_dump_jsonb(),
+        "pause_reason": "waiting_approval",
+        "bot_response": (
+            f"Milestone '{milestone.name}' ({idx + 1}/{len(plan)}) is ready for "
+            "tech lead review. POST to /approvals/{id}/resolve to continue."
+        ),
+    }

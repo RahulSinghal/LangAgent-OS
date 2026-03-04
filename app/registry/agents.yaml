@@ -168,6 +168,54 @@ agents:
       max_tool_calls: 6
       budget_usd: 1.00
 
+  - name: CodingPlanAgent
+    role: tech_lead
+    description: >
+      Divides the approved SOW backlog into sequential, independently-reviewable
+      coding milestones and raises a tech-lead approval gate before any code is
+      written. Supports rejection-feedback re-planning loop.
+    capabilities:
+      - milestone_planning
+      - backlog_decomposition
+      - rejection_feedback_loop
+    required_inputs:
+      - scope
+      - requirements
+      - gathered_requirements
+    output_schema: CodingPlanPatch
+    prompt_template_path: prompts/coding_plan.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 1.00
+
+  - name: MilestoneCodeAgent
+    role: engineer
+    description: >
+      Generates production-quality code for one coding milestone at a time.
+      Writes files to disk via write_file tool. Raises a per-milestone tech-lead
+      approval gate. Supports rejection-feedback re-generation for the current
+      milestone without resetting other milestones.
+    capabilities:
+      - code_generation
+      - file_writing
+      - rejection_feedback_loop
+    required_inputs:
+      - coding_plan
+      - current_milestone_index
+      - scope
+      - requirements
+    output_schema: MilestoneCodePatch
+    prompt_template_path: prompts/milestone_code.j2
+    allowed_tools:
+      - write_file
+      - read_file
+    limits:
+      max_steps: 10
+      max_tool_calls: 20
+      budget_usd: 3.00
+
 # ── Phase 2 stubs (future) ────────────────────────────────────────
 #  - name: QAAuditorAgent
 #  - name: ArchitectAgent

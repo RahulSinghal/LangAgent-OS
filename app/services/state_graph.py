@@ -14,6 +14,8 @@ _PHASES: list[str] = [
     "prd",
     "commercials",
     "sow",
+    "coding",
+    "milestone",
     "completed",
 ]
 

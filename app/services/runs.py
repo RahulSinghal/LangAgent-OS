@@ -186,13 +186,9 @@ def start_run(
         doc_type = ingestion.get("document_type", "unknown")
         doc_summary = ingestion.get("summary_message", "")
 
-        # For PRD/SOW uploads: pre-set current_phase so the entry router jumps
-        # directly to the review gate, bypassing the full discovery loop.
-        # BRD uploads stay at "init" so discovery runs with gap follow-up questions.
-        if doc_type == "prd" and "current_phase" not in initial_patch:
-            initial_patch["current_phase"] = "prd"
-        elif doc_type == "sow" and "current_phase" not in initial_patch:
-            initial_patch["current_phase"] = "sow"
+        # document_type is set in initial_patch (from sot_patch) so discovery
+        # knows which phase to fast-track to after gap Q&A completes.
+        # No manual current_phase override — the graph handles routing generically.
 
         if doc_summary:
             # User note (if any) is appended so it takes semantic precedence.
@@ -263,6 +259,8 @@ def resume_run(
     run_id: int,
     user_message: str | None = None,
     approval_patch: dict | None = None,
+    document_content: str | None = None,
+    document_filename: str | None = None,
 ) -> Run:
     """Resume a paused run.
 
@@ -270,11 +268,24 @@ def resume_run(
     approval decision, then re-invokes the graph.  The conditional entry
     point routes the graph to the correct node based on current_phase.
 
+    When a document is shared mid-conversation (document_content provided),
+    it is ingested, extracted content is added to the SoT, and document_type
+    is recorded.  The discovery node then runs gap Q&A as needed; on
+    completion it advances current_phase and the graph fast-tracks:
+      - prd              → prd_gate  (uploaded doc IS the PRD)
+      - sow              → sow_gate  (uploaded doc IS the SOW)
+      - market_eval      → market_eval_gate
+      - commercials      → commercials_gate
+      - technical_design → coding_plan (generates milestone plan from the design)
+      - brd / unknown    → normal market_eval flow
+
     Args:
-        db:              Active DB session.
-        run_id:          Run to resume.
-        user_message:    User's answer to the last discovery question.
-        approval_patch:  e.g. {"prd": "approved"} — injected by approval service.
+        db:                Active DB session.
+        run_id:            Run to resume.
+        user_message:      User's answer to the last discovery question.
+        approval_patch:    e.g. {"prd": "approved"} — injected by approval service.
+        document_content:  Raw text of a document shared mid-conversation.
+        document_filename: Original filename of the uploaded document.
 
     Returns:
         The updated Run ORM object.
@@ -296,15 +307,39 @@ def resume_run(
     if sot is None:
         raise ValueError(f"No snapshot found for run {run_id}")
 
+    # ── Mid-conversation document ingestion (optional) ────────────────────────
+    combined_message: str | None = user_message
+    if document_content:
+        from app.services.document_ingestion import ingest_document
+        ingestion = ingest_document(document_content, filename=document_filename or "")
+        doc_sot_patch = ingestion.get("sot_patch", {})
+        doc_type = ingestion.get("document_type", "unknown")
+        doc_summary = ingestion.get("summary_message", "")
+
+        # Merge extracted data into SoT immediately
+        if doc_sot_patch:
+            sot = apply_patch(sot, doc_sot_patch)
+
+        # Build combined message so the user note + doc summary are both captured
+        if doc_summary:
+            combined_message = (
+                f"{doc_summary}\n\nUser note: {user_message}" if user_message else doc_summary
+            )
+
+        # document_type is already set in sot via sot_patch.
+        # Phase routing is handled generically by the discovery node and
+        # _route_after_discovery: after gap Q&A completes, the graph fast-tracks
+        # to whichever gate/node corresponds to the detected document type.
+
     # Apply incoming context
     patch: dict = {}
-    if user_message is not None:
-        patch["last_user_message"] = user_message
+    if combined_message is not None:
+        patch["last_user_message"] = combined_message
         # Save to conversation history when resuming from waiting_user
-        if run.session_id and user_message:
+        if run.session_id and combined_message:
             try:
                 from app.services.sessions import add_message
-                add_message(db, session_id=run.session_id, role="user", content=user_message)
+                add_message(db, session_id=run.session_id, role="user", content=combined_message)
             except Exception:
                 pass
     if approval_patch:

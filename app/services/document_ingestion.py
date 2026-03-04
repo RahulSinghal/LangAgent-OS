@@ -87,6 +87,31 @@ _SOW_SIGNALS_RE = re.compile(
     r"project deliverables?|milestone payment)\b",
     re.IGNORECASE,
 )
+_MARKET_EVAL_SIGNALS_RE = re.compile(
+    r"\b(market (analysis|evaluation|assessment|research)|vendor (comparison|assessment|evaluation)|"
+    r"build vs\.? buy|buy vs\.? build|make or buy|competitive analysis|"
+    r"vendor scoring|vendor selection|market landscape|technology evaluation|"
+    r"solution comparison|platform comparison|off[- ]the[- ]shelf)\b",
+    re.IGNORECASE,
+)
+_COMMERCIALS_SIGNALS_RE = re.compile(
+    r"\b(pricing (proposal|model|structure|plan)|commercial (proposal|terms|offer)|"
+    r"cost (estimate|breakdown|proposal)|rate card|billing (model|schedule)|"
+    r"payment schedule|commercial pricing|project (cost|budget estimate)|"
+    r"invoice schedule|licensing (fee|cost)|per[- ]seat pricing|"
+    r"fixed[- ]price|time and materials|retainer)\b",
+    re.IGNORECASE,
+)
+_TECH_DESIGN_SIGNALS_RE = re.compile(
+    r"\b(technical (design|specification|architecture|spec)|system design|"
+    r"architecture (document|overview|diagram)|component diagram|"
+    r"api design|api specification|openapi|database schema|er diagram|"
+    r"entity[- ]relationship|data model|class diagram|sequence diagram|"
+    r"implementation plan|tech stack|infrastructure design|"
+    r"software architecture|design document|technical blueprint|"
+    r"system architecture|microservices|service mesh|deployment architecture)\b",
+    re.IGNORECASE,
+)
 
 # ── Gap-analysis configuration ─────────────────────────────────────────────────
 
@@ -102,6 +127,18 @@ _REQUIRED_SECTIONS: dict[str, list[str]] = {
     "sow": [
         "scope", "deliverables", "milestones",
         "payment terms", "assumptions", "risks",
+    ],
+    "technical_design": [
+        "architecture", "components", "data model",
+        "api", "tech stack", "non-functional requirements",
+    ],
+    "market_eval": [
+        "evaluation criteria", "vendor options", "recommendation",
+        "cost comparison", "risks",
+    ],
+    "commercials": [
+        "pricing", "payment schedule", "milestones",
+        "rate card", "assumptions",
     ],
 }
 
@@ -121,6 +158,21 @@ _GAP_QUESTIONS: dict[str, str] = {
     "timeline":                   "What is the expected project timeline and go-live date?",
     "assumptions":                "What key assumptions underpin this document?",
     "risks":                      "What are the primary risks and proposed mitigations?",
+    # Technical design specific
+    "architecture":               "Can you describe the overall system architecture and main components?",
+    "components":                 "What are the key services/modules and how do they interact?",
+    "data model":                 "What are the primary data entities and their relationships?",
+    "api":                        "Are there existing APIs or integration points we should be aware of?",
+    "tech stack":                 "What is the preferred technology stack (language, framework, database)?",
+    # Market evaluation specific
+    "evaluation criteria":        "What criteria are most important for the vendor/solution selection?",
+    "vendor options":             "Which vendors or solutions have been shortlisted for evaluation?",
+    "recommendation":             "What is the recommended build/buy/hybrid decision and rationale?",
+    "cost comparison":            "What are the comparative costs across the shortlisted options?",
+    # Commercials specific
+    "pricing":                    "What are the proposed fees — fixed-price, T&M, or retainer?",
+    "payment schedule":           "What are the payment milestones and due dates?",
+    "rate card":                  "What are the day/hourly rates for each role in the team?",
 }
 
 
@@ -497,11 +549,36 @@ def detect_document_type(content: str, filename: str = "") -> str:
     if "sow" in name_lower or "statement_of_work" in name_lower or "statement-of-work" in name_lower:
         return "sow"
 
+    # Filename hints for technical design
+    if any(k in name_lower for k in (
+        "tech_design", "technical_design", "tech-design", "architecture",
+        "system_design", "system-design", "design_doc", "design-doc",
+        "tech_spec", "technical_spec",
+    )):
+        return "technical_design"
+
+    # Filename hints for market evaluation
+    if any(k in name_lower for k in (
+        "market_eval", "market-eval", "market_analysis", "market-analysis",
+        "vendor_comparison", "vendor-comparison", "build_vs_buy", "build-vs-buy",
+    )):
+        return "market_eval"
+
+    # Filename hints for commercials
+    if any(k in name_lower for k in (
+        "commercial", "pricing", "rate_card", "rate-card",
+        "cost_estimate", "cost-estimate",
+    )):
+        return "commercials"
+
     # Content scoring — count signal matches
     scores: dict[str, int] = {
         "brd": len(_BRD_SIGNALS_RE.findall(content)),
         "prd": len(_PRD_SIGNALS_RE.findall(content)),
         "sow": len(_SOW_SIGNALS_RE.findall(content)),
+        "technical_design": len(_TECH_DESIGN_SIGNALS_RE.findall(content)),
+        "market_eval": len(_MARKET_EVAL_SIGNALS_RE.findall(content)),
+        "commercials": len(_COMMERCIALS_SIGNALS_RE.findall(content)),
     }
     best_type, best_score = max(scores.items(), key=lambda x: x[1])
     return best_type if best_score >= 2 else "unknown"
