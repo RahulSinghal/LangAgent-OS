@@ -92,9 +92,14 @@ def test_discovery_sets_bot_response():
 
 
 def test_discovery_second_call_continues():
-    """Mock discovery completes when last_user_message is present."""
+    """Mock discovery completes when last_user_message is present and a prior question exists."""
     settings.USE_MOCK_AGENTS = True
-    state = _make_state(current_phase="discovery", last_user_message="Answer")
+    # Mock agent's "second call" heuristic requires at least one existing open question.
+    state = _make_state(
+        current_phase="discovery",
+        last_user_message="Answer",
+        open_questions=[{"question": "What is the primary use case?", "category": "scope", "answered": False}],
+    )
     result = discovery_loop(state)
     assert result["pause_reason"] is None
     assert result["bot_response"] is None
@@ -240,7 +245,12 @@ def test_graph_invoke_resumes_to_prd_gate():
     settings.USE_MOCK_AGENTS = True
     from app.sot.state import create_initial_state, ProjectState
     sot = create_initial_state(project_id=99, run_id=1)
-    sot = apply_patch(sot, {"current_phase": "discovery", "last_user_message": "Answer"})
+    # Mock agent's "second call" heuristic requires at least one existing open question.
+    sot = apply_patch(sot, {
+        "current_phase": "discovery",
+        "last_user_message": "Answer",
+        "open_questions": [{"question": "What is the primary use case?", "category": "scope", "answered": False}],
+    })
 
     wf = get_workflow()
     state: WorkflowState = {
@@ -279,8 +289,9 @@ def test_graph_invoke_approved_prd_continues_to_sow_gate():
     assert final.current_phase == Phase.COMMERCIALS
 
 
-def test_graph_invoke_approved_sow_completes():
-    """SOW approved → end_node → phase=completed, no pause."""
+def test_graph_invoke_approved_sow_proceeds_to_coding_plan():
+    """SOW approved → coding_plan runs → pauses at coding_plan_gate for tech lead sign-off."""
+    settings.USE_MOCK_AGENTS = True
     from app.sot.state import create_initial_state, ProjectState
     sot = create_initial_state(project_id=99, run_id=1)
     sot = apply_patch(sot, {
@@ -296,6 +307,8 @@ def test_graph_invoke_approved_sow_completes():
         "approval_id": None,
     }
     result = wf.invoke(state)
-    assert result["pause_reason"] is None
+    # After SOW approval the workflow now proceeds to coding_plan_gate, not end.
+    assert result["pause_reason"] == "waiting_approval"
     final = ProjectState(**result["sot"])
-    assert final.current_phase == Phase.COMPLETED
+    assert final.current_phase == Phase.CODING
+    assert len(final.coding_plan) > 0
