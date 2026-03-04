@@ -186,13 +186,9 @@ def start_run(
         doc_type = ingestion.get("document_type", "unknown")
         doc_summary = ingestion.get("summary_message", "")
 
-        # For PRD/SOW uploads: pre-set current_phase so the entry router jumps
-        # directly to the review gate, bypassing the full discovery loop.
-        # BRD uploads stay at "init" so discovery runs with gap follow-up questions.
-        if doc_type == "prd" and "current_phase" not in initial_patch:
-            initial_patch["current_phase"] = "prd"
-        elif doc_type == "sow" and "current_phase" not in initial_patch:
-            initial_patch["current_phase"] = "sow"
+        # document_type is set in initial_patch (from sot_patch) so discovery
+        # knows which phase to fast-track to after gap Q&A completes.
+        # No manual current_phase override — the graph handles routing generically.
 
         if doc_summary:
             # User note (if any) is appended so it takes semantic precedence.
@@ -273,12 +269,15 @@ def resume_run(
     point routes the graph to the correct node based on current_phase.
 
     When a document is shared mid-conversation (document_content provided),
-    the document is ingested and the current phase may be advanced:
-      - technical_design: stays in discovery (gap Q&A), then fast-tracks to
-        coding_plan when discovery completes (bypassing market_eval/PRD/SOW).
-      - prd: jumps to prd_gate, skipping discovery and market_eval.
-      - sow: jumps to sow_gate, skipping earlier phases.
-      - brd: stays in current phase; gap questions injected into state.
+    it is ingested, extracted content is added to the SoT, and document_type
+    is recorded.  The discovery node then runs gap Q&A as needed; on
+    completion it advances current_phase and the graph fast-tracks:
+      - prd              → prd_gate  (uploaded doc IS the PRD)
+      - sow              → sow_gate  (uploaded doc IS the SOW)
+      - market_eval      → market_eval_gate
+      - commercials      → commercials_gate
+      - technical_design → coding_plan (generates milestone plan from the design)
+      - brd / unknown    → normal market_eval flow
 
     Args:
         db:                Active DB session.
@@ -327,24 +326,10 @@ def resume_run(
                 f"{doc_summary}\n\nUser note: {user_message}" if user_message else doc_summary
             )
 
-        # ── Phase-skip logic ───────────────────────────────────────────────────
-        # Only advance phase if we are still in an early-enough phase to benefit.
-        _BEFORE_PRD = {"init", "discovery", "market_eval"}
-        _BEFORE_SOW = {"init", "discovery", "market_eval", "prd", "commercials"}
-        _IN_DISCOVERY = {"init", "discovery"}
-        current = sot.current_phase.value
-
-        if doc_type == "prd" and current in _BEFORE_PRD:
-            # Uploaded PRD replaces the generation phase — jump straight to gate.
-            sot = apply_patch(sot, {"current_phase": "prd"})
-        elif doc_type == "sow" and current in _BEFORE_SOW:
-            # Uploaded SOW replaces generation — jump straight to gate.
-            sot = apply_patch(sot, {"current_phase": "sow"})
-        elif doc_type == "technical_design" and current in _IN_DISCOVERY:
-            # Stay in discovery for gap Q&A; document_type flag already set.
-            # _route_after_discovery will fast-track to coding_plan on completion.
-            pass
-        # brd / unknown: no phase change — gap questions injected via sot_patch
+        # document_type is already set in sot via sot_patch.
+        # Phase routing is handled generically by the discovery node and
+        # _route_after_discovery: after gap Q&A completes, the graph fast-tracks
+        # to whichever gate/node corresponds to the detected document type.
 
     # Apply incoming context
     patch: dict = {}

@@ -298,11 +298,39 @@ def test_route_after_discovery_pause_takes_priority():
     assert _route_after_discovery(state) == "pause"
 
 
-def test_route_after_discovery_technical_design_returns_fast_track():
-    """technical_design doc with no pause → fast_track to coding_plan."""
+def test_route_after_discovery_technical_design_returns_fast_coding():
+    """technical_design doc → fast_coding to coding_plan generator."""
     state = _make_state(current_phase="discovery", document_type="technical_design")
     state["pause_reason"] = None
-    assert _route_after_discovery(state) == "fast_track"
+    assert _route_after_discovery(state) == "fast_coding"
+
+
+def test_route_after_discovery_prd_returns_fast_prd():
+    """PRD doc → fast_prd; uploaded doc IS the PRD, skip generation."""
+    state = _make_state(current_phase="discovery", document_type="prd")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "fast_prd"
+
+
+def test_route_after_discovery_sow_returns_fast_sow():
+    """SOW doc → fast_sow; uploaded doc IS the SOW, skip generation."""
+    state = _make_state(current_phase="discovery", document_type="sow")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "fast_sow"
+
+
+def test_route_after_discovery_market_eval_returns_fast_market_eval():
+    """market_eval doc → fast_market_eval; skip market_eval generation."""
+    state = _make_state(current_phase="discovery", document_type="market_eval")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "fast_market_eval"
+
+
+def test_route_after_discovery_commercials_returns_fast_commercials():
+    """commercials doc → fast_commercials; skip commercials generation."""
+    state = _make_state(current_phase="discovery", document_type="commercials")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "fast_commercials"
 
 
 def test_route_after_discovery_no_document_type_returns_continue():
@@ -312,18 +340,78 @@ def test_route_after_discovery_no_document_type_returns_continue():
     assert _route_after_discovery(state) == "continue"
 
 
-def test_route_after_discovery_brd_returns_continue_not_fast_track():
-    """BRD docs go through the normal market_eval path, not the fast_track."""
+def test_route_after_discovery_brd_returns_continue():
+    """BRD goes through the normal market_eval path (gap Q&A handled in discovery)."""
     state = _make_state(current_phase="discovery", document_type="brd")
     state["pause_reason"] = None
     assert _route_after_discovery(state) == "continue"
 
 
-def test_route_after_discovery_prd_returns_continue_not_fast_track():
-    """PRD docs uploaded mid-discovery are not fast-tracked from discovery itself."""
-    state = _make_state(current_phase="discovery", document_type="prd")
+def test_route_after_discovery_unknown_returns_continue():
+    """Unknown doc type → normal continue, no fast-track."""
+    state = _make_state(current_phase="discovery", document_type="unknown")
     state["pause_reason"] = None
     assert _route_after_discovery(state) == "continue"
+
+
+# ── discovery_loop: current_phase set on fast-track completion ────────────────
+
+def test_discovery_loop_sets_phase_for_prd_doc_on_completion():
+    """When discovery completes with document_type='prd', current_phase is set to 'prd'
+    so that _route_after_discovery → fast_prd → prd_gate sees the right phase."""
+    settings.USE_MOCK_AGENTS = True
+    from app.sot.state import ProjectState
+    state = _make_state(
+        current_phase="discovery",
+        last_user_message="Here is our PRD.",
+        document_type="prd",
+        open_questions=[
+            {"question": "Any timeline constraints?", "category": "timeline", "answered": False}
+        ],
+    )
+    result = discovery_loop(state)
+    # Mock agent completes on second call (prior question + last_user_message)
+    if result["pause_reason"] is None:
+        sot = ProjectState(**result["sot"])
+        assert sot.current_phase.value == "prd"
+
+
+def test_discovery_loop_sets_phase_for_sow_doc_on_completion():
+    """When discovery completes with document_type='sow', current_phase is set to 'sow'."""
+    settings.USE_MOCK_AGENTS = True
+    from app.sot.state import ProjectState
+    state = _make_state(
+        current_phase="discovery",
+        last_user_message="Our SOW is attached.",
+        document_type="sow",
+        open_questions=[
+            {"question": "Confirm payment terms?", "category": "commercials", "answered": False}
+        ],
+    )
+    result = discovery_loop(state)
+    if result["pause_reason"] is None:
+        sot = ProjectState(**result["sot"])
+        assert sot.current_phase.value == "sow"
+
+
+def test_discovery_loop_no_phase_change_for_technical_design():
+    """technical_design is handled by the coding_plan node — discovery should NOT
+    pre-set current_phase for it."""
+    settings.USE_MOCK_AGENTS = True
+    from app.sot.state import ProjectState
+    state = _make_state(
+        current_phase="discovery",
+        last_user_message="Architecture doc attached.",
+        document_type="technical_design",
+        open_questions=[
+            {"question": "Tech stack?", "category": "architecture", "answered": False}
+        ],
+    )
+    result = discovery_loop(state)
+    if result["pause_reason"] is None:
+        sot = ProjectState(**result["sot"])
+        # Should still be "discovery" — coding_plan node sets CODING later
+        assert sot.current_phase.value == "discovery"
 
 
 # ── full graph: technical_design fast-track ───────────────────────────────────

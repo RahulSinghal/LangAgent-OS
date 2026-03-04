@@ -4,8 +4,11 @@ Graph structure (Phase 4):
 
   [conditional_entry_point] ─── routes to right node based on current_phase
         │
-        ├─ intake  →  discovery  →  [pause→END | continue→market_eval | fast_track→coding_plan]
-        │                              ↑ fast_track fires when document_type == "technical_design"
+        ├─ intake  →  discovery  →  [pause→END | continue→market_eval
+        │                              | fast_market_eval→market_eval_gate
+        │                              | fast_prd→prd_gate | fast_commercials→commercials_gate
+        │                              | fast_sow→sow_gate | fast_coding→coding_plan]
+        │                    ↑ fast_* fires when the user provided that phase's input doc
         │
         ├─ market_eval → market_eval_gate → [waiting→END | approved→prd]
         │
@@ -64,14 +67,25 @@ def _route_entry(state: WorkflowState) -> str:
 
 # ── Conditional edge routers ──────────────────────────────────────────────────
 
+# Maps document_type → conditional-edge key → graph node (see build_graph edges).
+# Each document type represents the "input" for a specific phase.  When
+# discovery completes after validating that input (gap Q&A), the graph fast-
+# tracks directly to the appropriate gate or generator node.
+_DOC_TYPE_ROUTE: dict[str, str] = {
+    "market_eval":      "fast_market_eval",   # → market_eval_gate
+    "prd":              "fast_prd",            # → prd_gate  (uploaded doc IS the PRD)
+    "commercials":      "fast_commercials",    # → commercials_gate
+    "sow":              "fast_sow",            # → sow_gate  (uploaded doc IS the SOW)
+    "technical_design": "fast_coding",         # → coding_plan (need to generate plan)
+    # "brd" and "unknown" → normal "continue" → market_eval
+}
+
+
 def _route_after_discovery(state: WorkflowState) -> str:
     if state.get("pause_reason"):
         return "pause"
-    # Fast-track technical design docs directly to coding plan, bypassing
-    # market_eval / PRD / commercials / SOW generation phases.
-    if state["sot"].get("document_type") == "technical_design":
-        return "fast_track"
-    return "continue"
+    doc_type = state["sot"].get("document_type") or ""
+    return _DOC_TYPE_ROUTE.get(doc_type, "continue")
 
 
 def _route_after_market_eval_gate(state: WorkflowState) -> str:
@@ -191,11 +205,20 @@ def build_graph() -> StateGraph:
     g.add_edge("end",          END)
 
     # Conditional edges — discovery
-    # "fast_track" skips market_eval/PRD/SOW when a technical design doc is present.
+    # Each fast_* key skips intermediate phases when the user has already provided
+    # that phase's input document (validated by gap Q&A in discovery first).
     g.add_conditional_edges(
         "discovery",
         _route_after_discovery,
-        {"pause": END, "continue": "market_eval", "fast_track": "coding_plan"},
+        {
+            "pause":            END,
+            "continue":         "market_eval",
+            "fast_market_eval": "market_eval_gate",   # skip market_eval generation
+            "fast_prd":         "prd_gate",            # skip market_eval + PRD gen
+            "fast_commercials": "commercials_gate",    # skip up to commercials gate
+            "fast_sow":         "sow_gate",            # skip to SOW gate
+            "fast_coding":      "coding_plan",         # skip to coding plan generator
+        },
     )
 
     # Conditional edges — market_eval gate

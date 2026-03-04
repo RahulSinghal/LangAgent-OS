@@ -584,6 +584,60 @@ def test_ingest_document_technical_design_sets_document_type_in_result():
     assert result["sot_patch"].get("document_type") == "technical_design"
 
 
+# ── market_eval document type ─────────────────────────────────────────────────
+
+def test_detect_document_type_market_eval_from_filename():
+    assert detect_document_type("any content", filename="market_eval_report.md") == "market_eval"
+
+
+def test_detect_document_type_market_eval_from_filename_vendor_comparison():
+    assert detect_document_type("any content", filename="vendor_comparison.pdf") == "market_eval"
+
+
+def test_detect_document_type_market_eval_from_content():
+    content = (
+        "# Market Evaluation Report\n\n"
+        "This market analysis compares the shortlisted vendors for the CRM platform. "
+        "Build vs. buy analysis: the competitive analysis shows two off-the-shelf solutions "
+        "that meet 80% of requirements. Vendor evaluation scores are below."
+    )
+    assert detect_document_type(content, filename="report.md") == "market_eval"
+
+
+def test_gap_analysis_market_eval_returns_questions_for_missing_sections():
+    sections = extract_sections("## Vendor Options\nSalesforce, HubSpot.\n")
+    questions = gap_analysis(sections, "market_eval")
+    assert len(questions) >= 2
+    assert any("criteria" in q.lower() or "recommend" in q.lower() for q in questions)
+
+
+# ── commercials document type ─────────────────────────────────────────────────
+
+def test_detect_document_type_commercials_from_filename():
+    assert detect_document_type("any content", filename="commercial_proposal.docx") == "commercials"
+
+
+def test_detect_document_type_commercials_from_filename_rate_card():
+    assert detect_document_type("any content", filename="rate_card_2026.xlsx") == "commercials"
+
+
+def test_detect_document_type_commercials_from_content():
+    content = (
+        "# Pricing Proposal\n\n"
+        "This commercial proposal outlines our pricing model for the engagement. "
+        "The rate card shows daily rates per role. Payment schedule follows "
+        "milestone delivery. Fixed-price contract with time and materials uplift."
+    )
+    assert detect_document_type(content, filename="proposal.md") == "commercials"
+
+
+def test_gap_analysis_commercials_returns_questions_for_missing_sections():
+    sections = extract_sections("## Pricing\nFixed-price: $200k.\n")
+    questions = gap_analysis(sections, "commercials")
+    assert len(questions) >= 2
+    assert any("payment" in q.lower() or "rate" in q.lower() or "milestone" in q.lower() for q in questions)
+
+
 def test_ingest_document_technical_design_is_apply_patch_compatible():
     """sot_patch from a technical design doc can be applied to a real ProjectState."""
     from app.sot.state import create_initial_state
