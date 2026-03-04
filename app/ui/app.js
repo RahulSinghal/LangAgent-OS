@@ -233,7 +233,13 @@ function fmtWhen(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
+  const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (sec < 60)           return "just now";
+  if (sec < 3600)         return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400)        return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 86400 * 7)    return `${Math.floor(sec / 86400)}d ago`;
+  if (sec < 86400 * 30)   return `${Math.floor(sec / 604800)}w ago`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
 function escapeHtml(s) {
