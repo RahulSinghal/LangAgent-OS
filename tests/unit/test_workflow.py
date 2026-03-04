@@ -5,7 +5,7 @@ import pytest
 from app.core.config import settings
 from app.sot.patch import apply_patch
 from app.sot.state import ApprovalStatus, Phase, create_initial_state
-from app.workflow.graph import WorkflowState, _route_entry, get_workflow
+from app.workflow.graph import WorkflowState, _route_entry, _route_after_discovery, get_workflow
 from app.workflow.nodes.approval_gate import prd_approval_gate, sow_approval_gate
 from app.workflow.nodes.discovery import discovery_loop
 from app.workflow.nodes.end import end_node
@@ -287,6 +287,77 @@ def test_graph_invoke_approved_prd_continues_to_sow_gate():
     assert result["pause_reason"] == "waiting_approval"
     final = ProjectState(**result["sot"])
     assert final.current_phase == Phase.COMMERCIALS
+
+
+# ── _route_after_discovery ────────────────────────────────────────────────────
+
+def test_route_after_discovery_pause_takes_priority():
+    """pause_reason always returns 'pause' regardless of document_type."""
+    state = _make_state(current_phase="discovery", document_type="technical_design")
+    state["pause_reason"] = "waiting_user"
+    assert _route_after_discovery(state) == "pause"
+
+
+def test_route_after_discovery_technical_design_returns_fast_track():
+    """technical_design doc with no pause → fast_track to coding_plan."""
+    state = _make_state(current_phase="discovery", document_type="technical_design")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "fast_track"
+
+
+def test_route_after_discovery_no_document_type_returns_continue():
+    """No document_type set → normal continue to market_eval."""
+    state = _make_state(current_phase="discovery")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "continue"
+
+
+def test_route_after_discovery_brd_returns_continue_not_fast_track():
+    """BRD docs go through the normal market_eval path, not the fast_track."""
+    state = _make_state(current_phase="discovery", document_type="brd")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "continue"
+
+
+def test_route_after_discovery_prd_returns_continue_not_fast_track():
+    """PRD docs uploaded mid-discovery are not fast-tracked from discovery itself."""
+    state = _make_state(current_phase="discovery", document_type="prd")
+    state["pause_reason"] = None
+    assert _route_after_discovery(state) == "continue"
+
+
+# ── full graph: technical_design fast-track ───────────────────────────────────
+
+def test_graph_invoke_technical_design_fast_tracks_to_coding_plan():
+    """Discovery with a technical_design doc completes → skips market_eval/PRD/SOW,
+    proceeds directly to coding_plan, pauses at coding_plan_gate."""
+    settings.USE_MOCK_AGENTS = True
+    from app.sot.state import create_initial_state, ProjectState
+    sot = create_initial_state(project_id=99, run_id=1)
+    # Mimic a resumed run: user answered a gap question, prior question in state
+    # for the mock agent's second-call heuristic, document_type is set.
+    sot = apply_patch(sot, {
+        "current_phase": "discovery",
+        "last_user_message": "The system uses microservices architecture.",
+        "document_type": "technical_design",
+        "open_questions": [
+            {"question": "What is the overall architecture?", "category": "architecture", "answered": False}
+        ],
+    })
+    wf = get_workflow()
+    state: WorkflowState = {
+        "sot": sot.model_dump_jsonb(),
+        "run_id": 1,
+        "pause_reason": None,
+        "bot_response": None,
+        "approval_id": None,
+    }
+    result = wf.invoke(state)
+    # Should pause at coding_plan_gate, NOT at market_eval_gate or prd_gate
+    assert result["pause_reason"] == "waiting_approval"
+    final = ProjectState(**result["sot"])
+    assert final.current_phase == Phase.CODING
+    assert len(final.coding_plan) > 0  # coding_plan was generated
 
 
 def test_graph_invoke_approved_sow_proceeds_to_coding_plan():

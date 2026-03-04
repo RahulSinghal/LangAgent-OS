@@ -510,3 +510,97 @@ def test_ingest_document_includes_followup_questions_for_brd_with_gaps():
 def test_ingest_document_empty_returns_unknown_document_type():
     result = ingest_document("")
     assert result["document_type"] == "unknown"
+
+
+# ── technical_design document type ────────────────────────────────────────────
+
+def test_detect_document_type_technical_design_from_filename_architecture():
+    assert detect_document_type("any content", filename="architecture.md") == "technical_design"
+
+
+def test_detect_document_type_technical_design_from_filename_tech_design():
+    assert detect_document_type("any content", filename="tech_design_v1.md") == "technical_design"
+
+
+def test_detect_document_type_technical_design_from_filename_system_design():
+    assert detect_document_type("any content", filename="system_design.pdf") == "technical_design"
+
+
+def test_detect_document_type_technical_design_from_filename_tech_spec():
+    assert detect_document_type("any content", filename="technical_spec.docx") == "technical_design"
+
+
+def test_detect_document_type_technical_design_from_content():
+    content = (
+        "# System Architecture\n\n"
+        "This document describes the software architecture and system design "
+        "for the platform. The data model is defined using an ER diagram. "
+        "The tech stack includes React, FastAPI, and PostgreSQL."
+    )
+    assert detect_document_type(content, filename="doc.md") == "technical_design"
+
+
+def test_detect_document_type_technical_design_requires_two_signals():
+    # Single signal is insufficient — should return unknown
+    content = "This document mentions system design once."
+    assert detect_document_type(content, filename="generic.md") == "unknown"
+
+
+def test_gap_analysis_technical_design_returns_questions_for_missing_sections():
+    # Document only has an Architecture section — should flag missing components,
+    # data model, API, tech stack, non-functional requirements.
+    sections = extract_sections(
+        "## Architecture\nThree-tier web application.\n"
+    )
+    questions = gap_analysis(sections, "technical_design")
+    assert len(questions) >= 3
+    assert any("api" in q.lower() or "component" in q.lower() for q in questions)
+
+
+def test_gap_analysis_technical_design_no_gaps_when_all_sections_covered():
+    content = (
+        "## Architecture\nMicroservices on Kubernetes.\n\n"
+        "## Components\nAuth service, API gateway, data service.\n\n"
+        "## Data Model\nUser, Project, Run entities.\n\n"
+        "## API\nREST over HTTPS, OpenAPI spec attached.\n\n"
+        "## Tech Stack\nPython, FastAPI, PostgreSQL, Redis.\n\n"
+        "## Non-Functional Requirements\nP99 latency < 500 ms.\n"
+    )
+    sections = extract_sections(content)
+    questions = gap_analysis(sections, "technical_design")
+    assert questions == []
+
+
+def test_ingest_document_technical_design_sets_document_type_in_result():
+    content = (
+        "# System Architecture\n\n"
+        "This technical design document describes the software architecture. "
+        "The data model is built around a PostgreSQL schema with ER diagrams. "
+        "The tech stack is Python/FastAPI. API design follows REST principles. "
+        "System design follows a microservices approach."
+    )
+    result = ingest_document(content, filename="architecture.md")
+    assert result["document_type"] == "technical_design"
+    assert result["sot_patch"].get("document_type") == "technical_design"
+
+
+def test_ingest_document_technical_design_is_apply_patch_compatible():
+    """sot_patch from a technical design doc can be applied to a real ProjectState."""
+    from app.sot.state import create_initial_state
+    from app.sot.patch import apply_patch as _apply_patch
+
+    content = (
+        "# Technical Architecture\n\n"
+        "## Architecture\nMicroservices on Kubernetes.\n\n"
+        "## Requirements\n- The system shall support horizontal scaling.\n"
+        "- API must respond within 200 ms under load.\n\n"
+        "## Assumptions\nAssume the team has Kubernetes experience.\n"
+    )
+    result = ingest_document(content, filename="tech_design.md")
+    patch = result["sot_patch"]
+    assert result["document_type"] == "technical_design"
+
+    state = create_initial_state(project_id=1)
+    patched = _apply_patch(state, patch)
+    assert patched.document_type == "technical_design"
+    assert len(patched.requirements) >= 1
