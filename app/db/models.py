@@ -638,6 +638,14 @@ class ComponentStore(Base):
     source_project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # run_id — which specific run produced this component.
+    # When a project is revised (e.g. PRD v2), end_node deletes all prior
+    # auto-extracted rows for this project and inserts fresh ones with the
+    # new run_id.  This prevents stale knowledge from old runs polluting
+    # retrieval for future projects.
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     component_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(100), nullable=False, default="general", index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

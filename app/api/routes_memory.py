@@ -1,12 +1,13 @@
 """Cross-project memory API routes.
 
 Endpoints:
-  POST   /memory/components            — store a component manually
-  GET    /memory/components            — list / filter components
-  GET    /memory/components/{id}       — fetch one component
-  DELETE /memory/components/{id}       — delete a component
-  POST   /memory/retrieve              — tag-based retrieval (returns ranked list)
-  POST   /memory/extract/{project_id}  — trigger auto-extraction from a project's latest SoT
+  POST   /memory/components                    — store a component manually
+  GET    /memory/components                    — list / filter components
+  GET    /memory/components/{id}               — fetch one component
+  DELETE /memory/components/{id}               — delete a component
+  POST   /memory/retrieve                      — tag-based retrieval (returns ranked list)
+  POST   /memory/extract/{project_id}          — trigger auto-extraction from a project's latest SoT
+  DELETE /memory/purge/{project_id}/auto       — purge stale auto-extracted rows before re-extraction
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from app.services.context_retrieval import (
     delete_component,
     get_component,
     list_components,
+    purge_auto_components,
     retrieve_relevant,
     store_component,
 )
@@ -211,8 +213,33 @@ def extract_from_project(
             detail=f"No snapshots found for project {project_id}",
         )
 
-    stored = auto_extract_and_store(db, project_id, latest.state_jsonb)
+    # find the run_id for this snapshot so we record it on each component
+    run_id = latest.run_id if latest else None
+    stored = auto_extract_and_store(db, project_id, latest.state_jsonb, run_id=run_id)
     return ExtractResponse(
         extracted_count=len(stored),
         component_ids=[c.id for c in stored],
     )
+
+
+class PurgeResponse(BaseModel):
+    deleted_count: int
+
+
+@router.delete(
+    "/memory/purge/{project_id}/auto",
+    response_model=PurgeResponse,
+    summary="Purge all auto-extracted components for a project (keeps manual ones)",
+)
+def purge_project_auto_components(
+    project_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> PurgeResponse:
+    """Delete stale auto-extracted knowledge for a project.
+
+    Useful before triggering a manual re-extraction after a project revision,
+    or when a project's direction has changed significantly.  Manual components
+    (source='manual') are never affected.
+    """
+    count = purge_auto_components(db, project_id)
+    return PurgeResponse(deleted_count=count)

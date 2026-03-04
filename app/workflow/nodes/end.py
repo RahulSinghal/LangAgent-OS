@@ -39,7 +39,9 @@ def end_node(state: dict) -> dict:
 
         db = SessionLocal()
         try:
-            extracted = auto_extract_and_store(db, sot.project_id, sot_dict)
+            extracted = auto_extract_and_store(
+                db, sot.project_id, sot_dict, run_id=sot.run_id
+            )
             if extracted:
                 logger.info(
                     "memory.extracted",

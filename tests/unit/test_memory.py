@@ -15,6 +15,7 @@ from app.services.context_retrieval import (
     delete_component,
     get_component,
     list_components,
+    purge_auto_components,
     retrieve_relevant,
     store_component,
 )
@@ -450,3 +451,175 @@ def test_build_context_summary_sections_by_type(db):
     summary = build_context_summary(components)
     # Should contain section headings
     assert "###" in summary
+
+
+# ── run_id tracking ───────────────────────────────────────────────────────────
+
+def test_bulk_store_records_run_id(db):
+    stored = bulk_store_components(
+        db,
+        [{"source_project_id": 1, "component_type": "requirement_pattern",
+          "category": "auth", "name": "Login", "content": "Login flow."}],
+        run_id=42,
+    )
+    assert stored[0].run_id == 42
+
+
+def test_auto_extract_records_run_id(db):
+    stored = auto_extract_and_store(db, project_id=1, sot=_make_sot(), run_id=99)
+    assert all(c.run_id == 99 for c in stored)
+
+
+def test_auto_extract_run_id_none_by_default(db):
+    stored = auto_extract_and_store(db, project_id=1, sot=_make_sot())
+    assert all(c.run_id is None for c in stored)
+
+
+# ── purge_auto_components (revision handling) ─────────────────────────────────
+
+def test_purge_auto_removes_auto_rows(db):
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+    count_before = len(list_components(db, source_project_id=1))
+    assert count_before > 0
+
+    deleted = purge_auto_components(db, project_id=1)
+    assert deleted == count_before
+    assert list_components(db, source_project_id=1) == []
+
+
+def test_purge_auto_preserves_manual_components(db):
+    # Store one manual component
+    store_component(
+        db,
+        source_project_id=1,
+        component_type="assumption",
+        category="general",
+        name="Manual note",
+        content="Approved by client.",
+        source="manual",
+    )
+    # Store auto components
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+
+    # Purge auto — manual must survive
+    purge_auto_components(db, project_id=1)
+    remaining = list_components(db, source_project_id=1)
+    assert len(remaining) == 1
+    assert remaining[0].source == "manual"
+    assert remaining[0].name == "Manual note"
+
+
+def test_purge_auto_only_affects_target_project(db):
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+    auto_extract_and_store(db, project_id=2, sot=_make_sot(domain="fintech"))
+
+    purge_auto_components(db, project_id=1)
+
+    p1_rows = list_components(db, source_project_id=1)
+    p2_rows = list_components(db, source_project_id=2)
+    assert p1_rows == []
+    assert len(p2_rows) > 0
+
+
+def test_purge_auto_returns_zero_when_nothing_to_delete(db):
+    assert purge_auto_components(db, project_id=999) == 0
+
+
+# ── Revision round-trip ───────────────────────────────────────────────────────
+
+def _make_v1_sot():
+    return {
+        "domain": "saas",
+        "requirements": [
+            {"id": "r1", "category": "functional",
+             "text": "Users can log in with email and password."},
+        ],
+        "decisions": [],
+        "risks": [],
+        "assumptions": [],
+    }
+
+
+def _make_v2_sot():
+    """Simulates PRD v2: login requirement updated + OAuth added."""
+    return {
+        "domain": "saas",
+        "requirements": [
+            {"id": "r1", "category": "functional",
+             "text": "Users can log in with email, password, or Google OAuth."},
+            {"id": "r2", "category": "non_functional",
+             "text": "Login must complete within 2 seconds."},
+        ],
+        "decisions": [
+            {"id": "d1", "decision": "Use Auth0 for identity management.",
+             "rationale": "Reduces time-to-market and supports OAuth natively."},
+        ],
+        "risks": [],
+        "assumptions": [],
+    }
+
+
+def test_revision_replaces_stale_components(db):
+    """PRD v1 completes → extract. PRD v2 completes → extract again.
+    Only v2 knowledge should remain for project 1.
+    """
+    # v1 completion
+    auto_extract_and_store(db, project_id=1, sot=_make_v1_sot(), run_id=1)
+    v1_rows = list_components(db, source_project_id=1)
+    assert len(v1_rows) == 1  # one requirement
+
+    # v2 completion — should replace, not append
+    auto_extract_and_store(db, project_id=1, sot=_make_v2_sot(), run_id=2)
+    v2_rows = list_components(db, source_project_id=1)
+
+    # 2 requirements + 1 decision = 3 (v1 row is gone)
+    assert len(v2_rows) == 3
+    # All rows belong to run 2
+    assert all(c.run_id == 2 for c in v2_rows)
+
+
+def test_revision_stale_content_not_retrievable(db):
+    """After revision, the v1 'email and password' requirement should be
+    replaced by the v2 'OAuth' requirement in retrieval results.
+    """
+    auto_extract_and_store(db, project_id=1, sot=_make_v1_sot(), run_id=1)
+    auto_extract_and_store(db, project_id=1, sot=_make_v2_sot(), run_id=2)
+
+    results = retrieve_relevant(db, query_tags=["saas", "login", "oauth"])
+    contents = " ".join(r["content"] for r in results).lower()
+
+    # v2 OAuth content must be present
+    assert "oauth" in contents
+    # v1-only content (just "email and password" without OAuth) must not dominate
+    # (the v1 row was deleted; only the updated v2 version exists)
+    v1_only_rows = [
+        r for r in results
+        if r["content"] == "Users can log in with email and password."
+    ]
+    assert v1_only_rows == []
+
+
+def test_revision_manual_components_survive_multiple_revisions(db):
+    """Manual annotations created between v1 and v2 must survive both revisions."""
+    auto_extract_and_store(db, project_id=1, sot=_make_v1_sot(), run_id=1)
+
+    # PM adds a manual note mid-project
+    store_component(
+        db,
+        source_project_id=1,
+        component_type="assumption",
+        category="general",
+        name="SLA agreed",
+        content="99.9% uptime SLA signed by client on 2026-01-15.",
+        source="manual",
+    )
+
+    # v2 revision completes
+    auto_extract_and_store(db, project_id=1, sot=_make_v2_sot(), run_id=2)
+
+    manual_rows = [
+        c for c in list_components(db, source_project_id=1)
+        if c.source == "manual"
+    ]
+    assert len(manual_rows) == 1
+    assert "SLA" in manual_rows[0].name

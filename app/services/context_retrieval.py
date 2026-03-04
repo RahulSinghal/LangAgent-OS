@@ -97,17 +97,22 @@ def store_component(
 def bulk_store_components(
     db: Session,
     components: list[dict[str, Any]],
+    *,
+    run_id: int | None = None,
 ) -> list[ComponentStore]:
     """Persist multiple components in a single transaction.
 
     Each dict in *components* must have: source_project_id, component_type,
     category, name, content.  Optional: tags (list[str]), source (str).
+    *run_id* is recorded on every row so callers can audit which run produced
+    each component.
     """
     rows: list[ComponentStore] = []
     for c in components:
         tags = c.get("tags") or _extract_tags(f"{c['name']} {c['content']}")
         rows.append(ComponentStore(
             source_project_id=c.get("source_project_id"),
+            run_id=run_id,
             component_type=c["component_type"],
             category=c.get("category", "general"),
             name=c["name"],
@@ -231,14 +236,45 @@ def delete_component(db: Session, component_id: int) -> bool:
 # ── Auto-extraction from completed SoT ───────────────────────────────────────
 
 
+def purge_auto_components(db: Session, project_id: int) -> int:
+    """Delete all auto-extracted components for *project_id*.
+
+    Called before re-extracting from a revised project so stale knowledge
+    from old runs (e.g. PRD v1) is replaced by the latest SoT (PRD v2).
+    Manual components (source='manual') are never touched.
+
+    Returns the number of rows deleted.
+    """
+    deleted = (
+        db.query(ComponentStore)
+        .filter(
+            ComponentStore.source_project_id == project_id,
+            ComponentStore.source == "auto",
+        )
+        # "evaluate" keeps the session identity map in sync — deleted objects
+        # are expelled from the map so recycled IDs never cause conflicts.
+        .delete(synchronize_session="evaluate")
+    )
+    db.commit()
+    return deleted
+
+
 def auto_extract_and_store(
     db: Session,
     project_id: int,
     sot: dict[str, Any],
+    *,
+    run_id: int | None = None,
 ) -> list[ComponentStore]:
     """Extract reusable patterns from a completed project's SoT and store them.
 
     Called by end_node after a project is marked completed.
+
+    **Revision handling**: before inserting, all previously auto-extracted
+    components for *project_id* are deleted.  This ensures that when a
+    project is revised (e.g. PRD v2 approved months later), future projects
+    only see the latest knowledge — not stale requirements or decisions from
+    the original run.  Manual components (source='manual') are preserved.
 
     Extracts:
       - requirements → "requirement_pattern"
@@ -247,6 +283,7 @@ def auto_extract_and_store(
       - assumptions  → "assumption"
 
     Each item is tagged with the project domain plus keywords from its text.
+    *run_id* is stored on every row for auditability.
     """
     domain = sot.get("domain", "general")
     components: list[dict[str, Any]] = []
@@ -322,7 +359,9 @@ def auto_extract_and_store(
     if not components:
         return []
 
-    return bulk_store_components(db, components)
+    # Replace: purge stale auto-extracted rows, then insert fresh ones.
+    purge_auto_components(db, project_id)
+    return bulk_store_components(db, components, run_id=run_id)
 
 
 def build_context_summary(components: list[dict[str, Any]]) -> str:
