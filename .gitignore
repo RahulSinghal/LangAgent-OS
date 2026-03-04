@@ -15,6 +15,7 @@ env/
 dist/
 build/
 *.egg
+agentos.egg-info/
 
 # pytest / coverage
 .pytest_cache/
