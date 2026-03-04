@@ -7,28 +7,53 @@
     <link rel="stylesheet" href="/ui/styles.css" />
   </head>
   <body>
+
+    <!-- ── Create project modal ─────────────────────────────────────────────── -->
+    <div id="createModal" class="modalOverlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal">
+        <div class="modalHeader">
+          <span class="modalTitle" id="modalTitle">New project</span>
+          <button id="btnModalClose" class="btn icon" title="Close">&#x2715;</button>
+        </div>
+        <div class="modalBody">
+          <label class="field block">
+            <span>Project name</span>
+            <input id="modalProjectName" type="text" placeholder="e.g. Customer Portal v2" autocomplete="off" />
+          </label>
+        </div>
+        <div class="modalFooter">
+          <button id="btnModalCancel" class="btn secondary">Cancel</button>
+          <button id="btnModalCreate" class="btn primary">Create project</button>
+        </div>
+      </div>
+    </div>
+
     <div class="shell">
       <header class="topbar">
         <div class="brand">
           <div class="logo">AO</div>
           <div class="title">
             <div class="name">AgentOS</div>
-            <div class="sub">FastAPI + LangGraph</div>
+            <div class="sub">Consulting OS</div>
           </div>
         </div>
-        <div class="badge" id="modeBadge" title="Agent mode">Mode: —</div>
+        <div class="modeBadgeWrap">
+          <div class="badge" id="modeBadge" title="Agent mode">Mode: —</div>
+        </div>
         <div class="controls">
           <button id="btnOpenDashboard" class="btn secondary">Dashboard</button>
-          <button id="btnNewProject" class="btn secondary">Create project</button>
+          <button id="btnNewProject" class="btn primary">+ New project</button>
         </div>
       </header>
 
       <main class="main">
+
+        <!-- ── Dashboard ───────────────────────────────────────────────────── -->
         <section class="dashboard" id="dashboardView">
           <div class="dashHeader">
             <div class="dashTitle">
               <div class="name">Projects</div>
-              <div class="subtle">Load a project to open chat and artifacts.</div>
+              <div class="subtle">Click a row to open the project workspace.</div>
             </div>
             <div class="dashActions">
               <button id="btnRefreshDashboard" class="btn secondary">Refresh</button>
@@ -39,17 +64,21 @@
           </div>
         </section>
 
+        <!-- ── Chat ────────────────────────────────────────────────────────── -->
         <section class="chat hidden" id="chatView">
           <div class="chatHeader">
             <div class="chatMeta">
-              <div class="metaRow">
-                <span class="mono" id="projectLabel">project: —</span>
-                <span class="badge" id="runStatus">idle</span>
-                <span class="mono" id="runIdLabel">run: —</span>
-                <span class="mono" id="nodeLabel">node: —</span>
+              <div class="metaRow metaRowPrimary">
+                <span class="projectChip" id="projectLabel">—</span>
+                <span class="statusBadge" id="runStatus">idle</span>
               </div>
-              <div class="metaRow subtle">
+              <div class="metaRow metaRowSecondary">
+                <span class="mono" id="runIdLabel">run: —</span>
+                <span class="metaSep">·</span>
                 <span class="mono" id="phaseLabel">phase: —</span>
+                <span class="metaSep">·</span>
+                <span class="mono" id="nodeLabel">node: —</span>
+                <span class="metaSep">·</span>
                 <span class="mono" id="approvalLabel">approval: —</span>
               </div>
               <div class="metaRow">
@@ -58,11 +87,11 @@
             </div>
             <div id="workflowDiagram" class="workflow-diagram hidden" aria-label="Workflow diagram"></div>
             <div class="chatActions">
-              <button id="btnToggleWorkflow" class="btn secondary">≋ Workflow</button>
-              <button id="btnToggleSide" class="btn secondary">Hide panel</button>
+              <button id="btnToggleWorkflow" class="btn secondary">Workflow</button>
+              <button id="btnToggleSide"     class="btn secondary">Hide panel</button>
+              <button id="btnRefresh"        class="btn secondary">Refresh</button>
+              <button id="btnLoadHistory"    class="btn secondary">History</button>
               <button id="btnBackToDashboard" class="btn secondary">Back</button>
-              <button id="btnLoadHistory" class="btn secondary">Load history</button>
-              <button id="btnRefresh" class="btn secondary">Refresh</button>
             </div>
           </div>
 
@@ -70,12 +99,12 @@
 
           <div class="composer">
             <input id="fileInput" type="file" class="hidden" />
-            <button id="btnAttach" class="btn icon" title="Attach document/image">+</button>
+            <button id="btnAttach" class="btn icon attachBtn" title="Attach document">+</button>
             <div class="composerBody">
               <textarea
                 id="userMessage"
-                rows="2"
-                placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+                rows="1"
+                placeholder="Message AgentOS… (Enter to send, Shift+Enter for new line)"
               ></textarea>
               <div id="attachmentChip" class="chip hidden"></div>
             </div>
@@ -83,57 +112,75 @@
           </div>
         </section>
 
+        <!-- ── Side panel ──────────────────────────────────────────────────── -->
         <aside class="side hidden" id="sidePanel">
-          <section class="card">
+
+          <!-- Next question -->
+          <section class="card" id="cardNextQuestion">
             <div class="cardTitle">Next question</div>
             <div id="nextQuestion" class="cardBody subtle">—</div>
             <div class="cardActions">
-              <button id="btnUseQuestion" class="btn secondary">Copy into reply</button>
+              <button id="btnUseQuestion" class="btn secondary btn-sm">Use as reply</button>
             </div>
           </section>
 
-          <section class="card">
-            <div class="cardTitle">Artifacts</div>
-            <div id="artifacts" class="cardBody subtle">—</div>
-          </section>
-
-          <section class="card">
+          <!-- Approval -->
+          <section class="card" id="cardApproval">
             <div class="cardTitle">Approval</div>
             <div class="cardBody">
-              <div id="pendingApprovals" class="cardBody subtle">—</div>
-              <label class="field block">
-                <span>Comments (optional)</span>
-                <textarea id="approvalComments" rows="3" placeholder="Reviewer feedback…"></textarea>
+              <div id="pendingApprovals" class="subtle pendingList">—</div>
+              <label class="field block approvalCommentWrap">
+                <span>Reviewer feedback</span>
+                <textarea id="approvalComments" rows="2" placeholder="Optional comments…"></textarea>
               </label>
-              <div class="row">
+              <div class="row approvalBtns">
                 <button id="btnApprove" class="btn ok">Approve</button>
-                <button id="btnReject" class="btn danger">Reject</button>
+                <button id="btnReject"  class="btn danger">Reject</button>
               </div>
             </div>
           </section>
 
-          <section class="card">
-            <div class="cardTitle">Document text (from upload)</div>
-            <div class="cardBody">
-              <textarea
-                id="documentText"
-                rows="8"
-                placeholder="When you attach a document, extracted text lands here and is sent with the next message."
-              ></textarea>
-            </div>
+          <!-- Artifacts -->
+          <section class="card" id="cardArtifacts">
+            <div class="cardTitle">Artifacts</div>
+            <div id="artifacts" class="cardBody subtle">—</div>
           </section>
 
-          <section class="card">
+          <!-- Eval coverage -->
+          <section class="card" id="cardEval">
             <div class="cardTitle evalCardTitle">
               <span>Eval Coverage</span>
               <span id="evalSummaryBadge" class="evalSummaryBadge">—</span>
             </div>
+            <div id="evalProgressWrap" class="evalProgressWrap hidden">
+              <div class="evalProgressTrack">
+                <div id="evalProgressFill" class="evalProgressFill" style="width:0%"></div>
+              </div>
+            </div>
             <div id="evalCoverageBody" class="cardBody evalBody subtle">—</div>
           </section>
+
+          <!-- Document upload (collapsible) -->
+          <section class="card cardCollapsible" id="cardDocument">
+            <div class="cardTitle cardToggle" id="btnToggleDocument" role="button" tabindex="0" aria-expanded="false">
+              <span>Document upload</span>
+              <span class="cardChevron">&#x25B8;</span>
+            </div>
+            <div class="cardCollapsibleBody hidden" id="documentBody">
+              <div class="cardBody">
+                <textarea
+                  id="documentText"
+                  rows="7"
+                  placeholder="Attach a file — extracted text appears here and is sent with your next message."
+                ></textarea>
+              </div>
+            </div>
+          </section>
+
         </aside>
       </main>
     </div>
 
-    <script src="/ui/app.js?v=20260302"></script>
+    <script src="/ui/app.js?v=20260304"></script>
   </body>
 </html>

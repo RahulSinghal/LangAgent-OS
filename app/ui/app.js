@@ -12,23 +12,68 @@ function getShell() {
   return node;
 }
 
-function nowIso() {
-  return new Date().toISOString();
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function addMessage(role, text) {
+function addMessage(role, text, isoTime) {
   const wrap = el("messages");
+
+  const msgWrap = document.createElement("div");
+  msgWrap.className = `msgWrap ${role}`;
+
+  // Role + time meta row
+  const meta = document.createElement("div");
+  meta.className = "msgMeta";
+  const roleLabel = document.createElement("span");
+  roleLabel.className = "msgRole";
+  roleLabel.textContent = role === "user" ? "You" : role === "error" ? "Error" : "Agent";
+  meta.appendChild(roleLabel);
+  if (isoTime) {
+    const t = document.createElement("span");
+    t.className = "msgTime";
+    t.textContent = fmtTime(isoTime);
+    meta.appendChild(t);
+  }
+  msgWrap.appendChild(meta);
+
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   div.textContent = text;
-  wrap.appendChild(div);
+  msgWrap.appendChild(div);
+
+  wrap.appendChild(msgWrap);
   wrap.scrollTop = wrap.scrollHeight;
 }
 
 function showDashboardError(err) {
   const msg = String(err?.message || err || "Unknown error");
   const box = el("dashboardTable");
-  box.innerHTML = `<div class="msg error">${escapeHtml(msg)}</div>`;
+  box.innerHTML = `<div class="msg error" style="max-width:100%">${escapeHtml(msg)}</div>`;
+}
+
+// ── Status pill / badge helpers ────────────────────────────────────────────
+
+function pillClass(state) {
+  if (!state) return "";
+  const s = String(state).toLowerCase();
+  if (s === "running" || s === "started")                                return "pill-running";
+  if (s === "waiting_approval" || s === "paused" || s === "pending")    return "pill-waiting";
+  if (s === "completed" || s === "done" || s === "finished")            return "pill-done";
+  if (s === "error" || s === "failed")                                  return "pill-error";
+  return "";
+}
+
+function statusBadgeClass(state) {
+  const s = String(state || "").toLowerCase();
+  if (s === "running" || s === "started")                             return "status-running";
+  if (s === "waiting_approval" || s === "paused" || s === "pending")  return "status-waiting";
+  if (s === "completed" || s === "done" || s === "finished")          return "status-done";
+  if (s === "error" || s === "failed")                                return "status-error";
+  return "";
 }
 
 function showVisibleError(err) {
@@ -108,8 +153,10 @@ async function refreshModeBadge() {
         ? `provider=${provider} model=${model} key=${validity}`
         : `reason=${reason || "n/a"}`;
 
-    el("modeBadge").textContent = label;
-    el("modeBadge").title = detail;
+    const mb = el("modeBadge");
+    mb.textContent = label;
+    mb.title = detail;
+    mb.className = `badge ${mode === "real" ? "status-done" : ""}`;
   } catch {
     // ignore
   }
@@ -118,10 +165,12 @@ async function refreshModeBadge() {
 function setMeta({ runId, status, node, phase, approvalId }) {
   const s = getState();
   const projectName = s.projectName || "—";
-  el("projectLabel").textContent = `project: ${projectName}`;
-  el("runStatus").textContent = status || "—";
+  el("projectLabel").textContent = projectName;
+  const badge = el("runStatus");
+  badge.textContent = status || "idle";
+  badge.className = "statusBadge " + statusBadgeClass(status);
   el("runIdLabel").textContent = `run: ${runId ?? "—"}`;
-  el("nodeLabel").textContent = `node: ${node ?? "—"}`;
+  el("nodeLabel").textContent  = `node: ${node ?? "—"}`;
   el("phaseLabel").textContent = `phase: ${phase ?? "—"}`;
   el("approvalLabel").textContent = `approval: ${approvalId ?? "—"}`;
 }
@@ -229,99 +278,96 @@ async function refreshDashboard() {
     const data = await api(`/projects/dashboard`, { method: "GET" });
     const rows = data?.projects || [];
     if (!rows.length) {
-      box.textContent = "No projects yet. Click “Create project” to start.";
+      box.innerHTML = `
+        <div style="text-align:center;padding:48px 16px;color:var(--muted)">
+          <div style="font-size:32px;margin-bottom:12px;opacity:0.3">&#x25A6;</div>
+          <div style="font-weight:700;margin-bottom:6px;color:var(--text)">No projects yet</div>
+          <div style="font-size:13px">Click <strong>+ New project</strong> to get started.</div>
+        </div>`;
       return;
     }
 
     const table = document.createElement("table");
     table.className = "table";
     table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Project</th>
-        <th>State</th>
-        <th>Artifacts</th>
-        <th>Approvals</th>
-        <th>Eval Cov.</th>
-        <th>Tokens</th>
-        <th>Cost</th>
-        <th>System hours</th>
-        <th>Last activity</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>State</th>
+          <th>Artifacts</th>
+          <th>Approvals</th>
+          <th>Eval cov.</th>
+          <th>Tokens</th>
+          <th>Cost</th>
+          <th>Runtime</th>
+          <th>Last activity</th>
+        </tr>
+      </thead>
+      <tbody></tbody>`;
 
     const tbody = table.querySelector("tbody");
     for (const r of rows) {
       const tr = document.createElement("tr");
+      tr.title = "Click to open project";
       const artifacts = r.artifacts || {};
 
-      const shownArtifactKeys = [
-        "brd",
-        "prd",
-        "sow",
-        "server_details_client",
-        "server_details_infra",
-        "input_document",
-      ]
+      const shownArtifactKeys = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document"]
         .filter((k) => artifacts[k])
         .slice(0, 4);
 
       const artifactHtml = shownArtifactKeys.length
-        ? shownArtifactKeys
-            .map((k) => {
-              const a = artifacts[k];
-              return `<button class="linkBtn" data-artifact="${a.id}" data-title="${k} v${a.version}">${k}</button>`;
-            })
-            .join(" · ")
-        : "—";
+        ? shownArtifactKeys.map((k) => {
+            const a = artifacts[k];
+            return `<button class="linkBtn" data-artifact="${a.id}" data-title="${k} v${a.version}">${k}</button>`;
+          }).join(" · ")
+        : '<span class="subtle">—</span>';
 
       const covPct = r.eval_coverage_pct;
       const covHtml = covPct == null
-        ? '<span class="mono subtle">—</span>'
-        : `<span class="evalCovBadge ${covPct >= 80 ? 'evalOk' : covPct >= 40 ? 'evalWarn' : 'evalBad'}">${covPct}%</span>`;
+        ? '<span class="subtle">—</span>'
+        : `<span class="evalCovBadge ${covPct >= 80 ? "evalOk" : covPct >= 40 ? "evalWarn" : "evalBad"}">${covPct}%</span>`;
+
+      const stateLabel = r.current_state || "idle";
+      const pcls = pillClass(r.run_status || r.current_state);
+      const pending = Number(r.pending_approvals || 0);
 
       tr.innerHTML = `
-      <td><div><strong>${escapeHtml(r.name)}</strong></div></td>
-      <td><span class="pill">${escapeHtml(r.current_state || "—")}</span></td>
-      <td class="mono">${artifactHtml}</td>
-      <td><span class="pill">${Number(r.pending_approvals || 0)} pending</span></td>
-      <td class="mono">${covHtml}</td>
-      <td class="mono">${Number(r.tokens_spent || 0)}</td>
-      <td class="mono">${fmtMoney(r.cost_usd || 0)}</td>
-      <td class="mono">${fmtHours(r.system_hours || 0)}</td>
-      <td class="mono">${fmtWhen(r.last_activity_at)}</td>
-      <td class="actions"><button class="btn secondary" data-load="${r.project_id}">Load</button></td>
-    `;
+        <td><strong>${escapeHtml(r.name)}</strong></td>
+        <td><span class="pill ${pcls}">${escapeHtml(stateLabel)}</span></td>
+        <td class="mono" style="font-size:12px">${artifactHtml}</td>
+        <td><span class="pill ${pending > 0 ? "pill-waiting" : ""}">${pending} pending</span></td>
+        <td>${covHtml}</td>
+        <td class="mono">${Number(r.tokens_spent || 0).toLocaleString()}</td>
+        <td class="mono">${fmtMoney(r.cost_usd || 0)}</td>
+        <td class="mono">${fmtHours(r.system_hours || 0)}</td>
+        <td class="mono">${fmtWhen(r.last_activity_at)}</td>`;
+
+      // Entire row click loads the project
+      tr.addEventListener("click", async (e) => {
+        // Don't trigger on artifact link-btn clicks
+        if (e.target.closest("[data-artifact]")) return;
+        try {
+          await loadProjectFromDashboard(r);
+        } catch (err) {
+          showVisibleError(err);
+        }
+      });
+
       tbody.appendChild(tr);
     }
 
     box.innerHTML = "";
     box.appendChild(table);
 
-    box.querySelectorAll("[data-load]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const pid = Number(btn.getAttribute("data-load"));
-        const row = rows.find((x) => Number(x.project_id) === pid);
-        if (!row) return;
-        try {
-          await loadProjectFromDashboard(row);
-        } catch (e) {
-          showVisibleError(e);
-        }
-      });
-    });
-
     box.querySelectorAll("[data-artifact]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
         const id = Number(btn.getAttribute("data-artifact"));
         const title = btn.getAttribute("data-title") || `Artifact ${id}`;
         try {
           await openArtifactInNewTab(id, title);
-        } catch (e) {
-          showVisibleError(e);
+        } catch (err) {
+          showVisibleError(err);
         }
       });
     });
@@ -378,6 +424,10 @@ async function refreshContext() {
   });
 
   el("nextQuestion").textContent = nextQ || "—";
+  const nqCard = document.getElementById("cardNextQuestion");
+  if (nqCard) {
+    nqCard.classList.toggle("card-warn", !!nextQ);
+  }
 
   // Workflow stepper (phases + substates)
   if (projectId) {
@@ -392,22 +442,26 @@ async function refreshContext() {
 
   // Pending approvals list (UI)
   const pendingBox = el("pendingApprovals");
+  const approvalCard = document.getElementById("cardApproval");
   if (!approvals.length) {
     pendingBox.textContent = "—";
+    approvalCard?.classList.remove("card-active");
   } else {
     pendingBox.innerHTML = "";
     for (const a of approvals) {
       const btn = document.createElement("button");
-      btn.className = "btn secondary";
-      btn.style.width = "100%";
-      btn.style.marginBottom = "8px";
-      btn.textContent = `#${a.id} • ${a.type} • ${a.status}`;
+      btn.className = "btn secondary pendingBtn";
+      btn.textContent = `#${a.id} · ${a.type} · ${a.status}`;
       btn.addEventListener("click", () => {
+        pendingBox.querySelectorAll(".pendingBtn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
         window.__selectedApprovalId = a.id;
       });
       pendingBox.appendChild(btn);
     }
     window.__selectedApprovalId = approvals[0].id;
+    pendingBox.querySelector(".pendingBtn")?.classList.add("active");
+    approvalCard?.classList.add("card-active");
   }
 
   const artifactsProjectId = run?.project_id;
@@ -421,27 +475,27 @@ async function refreshContext() {
     const artifactList = await api(`/projects/${artifactsProjectId}/artifacts`, { method: "GET" });
     const artifacts = artifactList?.artifacts || [];
     const box = el("artifacts");
+    const artifactCard = document.getElementById("cardArtifacts");
     if (!artifacts.length) {
       box.textContent = "—";
+      artifactCard?.classList.remove("card-ok");
     } else {
       box.innerHTML = "";
       for (const a of artifacts.slice(0, 6)) {
-        const row = document.createElement("div");
-        row.className = "mono";
-        row.style.marginBottom = "8px";
-
         const btn = document.createElement("button");
-        btn.className = "btn secondary";
-        btn.style.width = "100%";
-        btn.textContent = `${a.type} v${a.version}`;
+        btn.className = "artifactBtn";
+        btn.textContent = `${a.type}  v${a.version}`;
         btn.addEventListener("click", async () => {
-          const content = await api(`/artifacts/${a.id}/content`, { method: "GET" });
-          addMessage("system", `Artifact ${a.type} v${a.version}\n\n${content?.content || ""}`);
+          try {
+            const content = await api(`/artifacts/${a.id}/content`, { method: "GET" });
+            addMessage("system", `[${a.type} v${a.version}]\n\n${content?.content || ""}`, new Date().toISOString());
+          } catch (err) {
+            addMessage("error", String(err.message || err), new Date().toISOString());
+          }
         });
-
-        row.appendChild(btn);
-        box.appendChild(row);
+        box.appendChild(btn);
       }
+      artifactCard?.classList.add("card-ok");
     }
   }
 }
@@ -699,7 +753,26 @@ async function loadEvalReport(projectId) {
   const s = report.summary || {};
   const pct = s.coverage_pct ?? 0;
   badge.textContent = `${s.covered_features ?? 0}/${s.total_features ?? 0} (${pct}%)`;
-  badge.className = "evalSummaryBadge " + (pct >= 80 ? "evalOk" : pct >= 40 ? "evalWarn" : "evalBad");
+  const coverageClass = pct >= 80 ? "evalOk" : pct >= 40 ? "evalWarn" : "evalBad";
+  badge.className = "evalSummaryBadge " + coverageClass;
+
+  // Progress bar
+  const progressWrap = document.getElementById("evalProgressWrap");
+  const progressFill = document.getElementById("evalProgressFill");
+  if (progressWrap && progressFill && (s.total_features ?? 0) > 0) {
+    progressWrap.classList.remove("hidden");
+    // Small delay so the CSS transition fires
+    requestAnimationFrame(() => { progressFill.style.width = `${Math.min(pct, 100)}%`; });
+  }
+
+  // Card state
+  const evalCard = document.getElementById("cardEval");
+  if (evalCard) {
+    evalCard.classList.remove("card-ok", "card-warn", "card-active");
+    if (pct >= 80)      evalCard.classList.add("card-ok");
+    else if (pct >= 40) evalCard.classList.add("card-warn");
+    else                evalCard.classList.add("card-active");
+  }
 
   body.innerHTML = "";
 
@@ -847,8 +920,9 @@ async function sendMessage() {
   const docText = el("documentText").value.trim();
   if (!text && !docText) return;
 
-  addMessage("user", text || "(sent document only)");
+  addMessage("user", text || "(sent document only)", new Date().toISOString());
   el("userMessage").value = "";
+  autoResizeTextarea(el("userMessage"));
 
   const { runId, sessionId } = getIds();
   const projectId = await ensureProject();
@@ -898,24 +972,57 @@ async function loadHistory() {
   const messages = data?.messages || [];
   clearMessages();
   for (const m of messages) {
-    addMessage(uiRoleFromMessageRole(m.role), m.content || "");
+    addMessage(uiRoleFromMessageRole(m.role), m.content || "", m.created_at || null);
   }
   if (data?.latest_session_id) setSessionId(data.latest_session_id);
 }
 
-async function createProjectFlow() {
-  const name = window.prompt("Project name?");
-  if (!name || !name.trim()) return;
-  const created = await api(`/projects`, {
-    method: "POST",
-    body: JSON.stringify({ name: name.trim() }),
-  });
-  await refreshDashboard();
-  await loadProjectFromDashboard({
-    project_id: created.id,
-    name: created.name,
-    latest_run_id: null,
-  });
+// ── Create project modal ─────────────────────────────────────────────────────
+
+function openCreateModal() {
+  el("createModal").classList.remove("hidden");
+  el("modalProjectName").value = "";
+  setTimeout(() => el("modalProjectName").focus(), 50);
+}
+
+function closeCreateModal() {
+  el("createModal").classList.add("hidden");
+}
+
+async function submitCreateModal() {
+  const name = el("modalProjectName").value.trim();
+  if (!name) {
+    el("modalProjectName").focus();
+    return;
+  }
+  const btn = el("btnModalCreate");
+  btn.textContent = "Creating…";
+  btn.disabled = true;
+  try {
+    const created = await api(`/projects`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    closeCreateModal();
+    await refreshDashboard();
+    await loadProjectFromDashboard({
+      project_id: created.id,
+      name: created.name,
+      latest_run_id: null,
+    });
+  } catch (e) {
+    showVisibleError(e);
+  } finally {
+    btn.textContent = "Create project";
+    btn.disabled = false;
+  }
+}
+
+// ── Textarea auto-resize ──────────────────────────────────────────────────────
+
+function autoResizeTextarea(ta) {
+  ta.style.height = "auto";
+  ta.style.height = `${ta.scrollHeight}px`;
 }
 
 async function resolveApproval(decision) {
@@ -1045,13 +1152,39 @@ function setup() {
     }
   });
 
-  el("btnNewProject").addEventListener("click", async () => {
-    try {
-      await createProjectFlow();
-    } catch (e) {
-      showVisibleError(e);
-    }
+  // ── Modal ──────────────────────────────────────────────────────────────────
+  el("btnNewProject").addEventListener("click", () => openCreateModal());
+  el("btnModalClose").addEventListener("click", () => closeCreateModal());
+  el("btnModalCancel").addEventListener("click", () => closeCreateModal());
+  el("btnModalCreate").addEventListener("click", async () => {
+    try { await submitCreateModal(); } catch (e) { showVisibleError(e); }
   });
+  el("modalProjectName").addEventListener("keydown", async (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); try { await submitCreateModal(); } catch (e) { showVisibleError(e); } }
+    if (ev.key === "Escape") closeCreateModal();
+  });
+  el("createModal").addEventListener("click", (ev) => {
+    if (ev.target === el("createModal")) closeCreateModal();
+  });
+
+  // ── Document card toggle ───────────────────────────────────────────────────
+  const btnToggleDoc = document.getElementById("btnToggleDocument");
+  const docBody = document.getElementById("documentBody");
+  const docChevron = btnToggleDoc?.querySelector(".cardChevron");
+  if (btnToggleDoc && docBody) {
+    btnToggleDoc.addEventListener("click", () => {
+      const isHidden = docBody.classList.toggle("hidden");
+      btnToggleDoc.setAttribute("aria-expanded", String(!isHidden));
+      if (docChevron) docChevron.textContent = isHidden ? "\u25B8" : "\u25BE";
+    });
+    btnToggleDoc.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); btnToggleDoc.click(); }
+    });
+  }
+
+  // ── Textarea auto-resize ───────────────────────────────────────────────────
+  const ta = el("userMessage");
+  ta.addEventListener("input", () => autoResizeTextarea(ta));
 
   el("btnSend").addEventListener("click", async () => {
     try {
