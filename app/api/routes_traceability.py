@@ -32,6 +32,8 @@ class TraceLinkCreate(BaseModel):
     requirement_id: str
     test_id: str
     link_type: str = "test"
+    milestone_id: str | None = None
+    eval_type: str | None = None
     notes: str | None = None
 
 
@@ -41,6 +43,9 @@ class TraceLinkResponse(BaseModel):
     requirement_id: str
     test_id: str
     link_type: str
+    milestone_id: str | None = None
+    eval_type: str | None = None
+    source: str = "manual"
     notes: str | None = None
 
     model_config = {"from_attributes": True}
@@ -73,6 +78,8 @@ def create_link(
         requirement_id=body.requirement_id,
         test_id=body.test_id,
         link_type=body.link_type,
+        milestone_id=body.milestone_id,
+        eval_type=body.eval_type,
         notes=body.notes,
     )
     return TraceLinkResponse.model_validate(link)

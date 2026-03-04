@@ -30,6 +30,7 @@ from app.api.routes_system import router as system_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_policies import router as policies_router
 from app.api.routes_governance import router as governance_router
+from app.api.routes_eval_report import router as eval_report_router
 
 logger = structlog.get_logger(__name__)
 
@@ -107,6 +108,9 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix=settings.API_PREFIX)
     app.include_router(policies_router, prefix=settings.API_PREFIX)
     app.include_router(governance_router, prefix=settings.API_PREFIX)
+
+    # Eval report
+    app.include_router(eval_report_router, prefix=settings.API_PREFIX)
 
     return app
 

@@ -23,6 +23,9 @@ def create_trace_link(
     requirement_id: str,
     test_id: str,
     link_type: str = "test",
+    milestone_id: str | None = None,
+    eval_type: str | None = None,
+    source: str = "manual",
     notes: str | None = None,
 ) -> TraceLink:
     """Create a trace_link record linking a requirement to a test case.
@@ -33,6 +36,9 @@ def create_trace_link(
         requirement_id: SoT requirement ID (e.g. "r1").
         test_id:        Test case identifier (e.g. "TC-001").
         link_type:      "test" | "backlog" | "architecture" (default "test").
+        milestone_id:   Optional MilestoneItem.id this link belongs to.
+        eval_type:      "unit" | "integration" | "e2e" | "contract" | "manual".
+        source:         "manual" | "auto" — how the link was created.
         notes:          Optional free-text notes.
 
     Returns:
@@ -43,6 +49,9 @@ def create_trace_link(
         requirement_id=requirement_id,
         test_id=test_id,
         link_type=link_type,
+        milestone_id=milestone_id,
+        eval_type=eval_type,
+        source=source,
         notes=notes,
     )
     db.add(link)

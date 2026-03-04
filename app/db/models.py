@@ -313,6 +313,9 @@ class TraceLink(Base):
     requirement_id: string ID from SoT requirements (e.g. "r1", "r2")
     test_id:        string identifier for the linked test case (e.g. "TC-001")
     link_type:      "test" | "backlog" | "architecture" (extensible)
+    milestone_id:   optional MilestoneItem.id this link belongs to
+    eval_type:      "unit" | "integration" | "e2e" | "contract" | "manual"
+    source:         "manual" | "auto" — how the link was created
     """
     __tablename__ = "trace_links"
 
@@ -323,6 +326,9 @@ class TraceLink(Base):
     requirement_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     test_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     link_type: Mapped[str] = mapped_column(String(50), nullable=False, default="test")
+    milestone_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    eval_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="manual")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

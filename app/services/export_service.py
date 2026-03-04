@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Artifact, ChangeRequest, RunMetrics
 from app.services.change_control import list_change_requests
+from app.services.eval_report import build_eval_report, build_eval_report_md
 from app.services.provenance import get_provenance, get_run_metrics
 
 
@@ -150,6 +151,10 @@ def build_export_zip(db: Session, project_id: int) -> bytes:
         # Change log markdown
         change_log_md = build_change_log_md(crs)
         zf.writestr("change_log.md", change_log_md)
+
+        # Eval coverage report
+        eval_report = build_eval_report(db, project_id)
+        zf.writestr("eval_report.md", build_eval_report_md(eval_report))
 
         # Run metrics JSON
         if metrics_obj is not None:
