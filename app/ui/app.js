@@ -220,6 +220,7 @@ async function loadProjectFromDashboard(row) {
     el("pendingApprovals").textContent = "—";
     el("artifacts").textContent = "—";
   }
+  loadEvalReport(Number(row.project_id)).catch(() => {});
 }
 
 async function refreshDashboard() {
@@ -403,6 +404,12 @@ async function refreshContext() {
   }
 
   const artifactsProjectId = run?.project_id;
+
+  // Refresh eval report silently
+  if (artifactsProjectId) {
+    loadEvalReport(artifactsProjectId).catch(() => {});
+  }
+
   if (artifactsProjectId) {
     const artifactList = await api(`/projects/${artifactsProjectId}/artifacts`, { method: "GET" });
     const artifacts = artifactList?.artifacts || [];
@@ -661,6 +668,124 @@ function renderWorkflowDiagram(graph) {
 
   s += "</svg>";
   container.innerHTML = s;
+}
+
+// ── Eval Coverage ─────────────────────────────────────────────────────────────
+
+async function loadEvalReport(projectId) {
+  const badge = document.getElementById("evalSummaryBadge");
+  const body  = document.getElementById("evalCoverageBody");
+  if (!badge || !body) return;
+
+  badge.textContent = "…";
+  body.textContent  = "";
+
+  let report;
+  try {
+    report = await api(`/projects/${projectId}/eval-report`, { method: "GET" });
+  } catch {
+    badge.textContent = "—";
+    body.textContent  = "No eval data yet.";
+    return;
+  }
+
+  const s = report.summary || {};
+  const pct = s.coverage_pct ?? 0;
+  badge.textContent = `${s.covered_features ?? 0}/${s.total_features ?? 0} (${pct}%)`;
+  badge.className = "evalSummaryBadge " + (pct >= 80 ? "evalOk" : pct >= 40 ? "evalWarn" : "evalBad");
+
+  body.innerHTML = "";
+
+  const milestones = report.milestones || [];
+  const ungrouped  = report.ungrouped_features || [];
+
+  if (!milestones.length && !ungrouped.length) {
+    body.textContent = "No milestones or features found.";
+    return;
+  }
+
+  for (const ms of milestones) {
+    const section = _evalMilestoneEl(ms);
+    body.appendChild(section);
+  }
+
+  if (ungrouped.length) {
+    const section = _evalMilestoneEl({
+      milestone_id: "ungrouped",
+      name: "Ungrouped Features",
+      status: "—",
+      features: ungrouped,
+      coverage: {
+        total:   ungrouped.length,
+        covered: ungrouped.filter(f => f.covered).length,
+        pct:     ungrouped.length
+          ? Math.round(ungrouped.filter(f => f.covered).length / ungrouped.length * 100)
+          : 0,
+      },
+    });
+    body.appendChild(section);
+  }
+}
+
+function _evalMilestoneEl(ms) {
+  const cov = ms.coverage || {};
+  const pct = cov.pct ?? 0;
+
+  const section = document.createElement("div");
+  section.className = "evalMilestone";
+
+  // Header row — click to collapse/expand
+  const header = document.createElement("div");
+  header.className = "evalMsHeader";
+  header.innerHTML = `
+    <span class="evalMsName">${escapeHtml(ms.name)}</span>
+    <span class="evalMsCov ${pct >= 80 ? "evalOk" : pct >= 40 ? "evalWarn" : "evalBad"}">${cov.covered ?? 0}/${cov.total ?? 0}</span>
+    <span class="evalChevron">▾</span>
+  `;
+
+  const list = document.createElement("div");
+  list.className = "evalFeatureList";
+
+  const features = ms.features || [];
+  if (!features.length) {
+    const empty = document.createElement("div");
+    empty.className = "evalFeatureRow subtle";
+    empty.textContent = "No features linked.";
+    list.appendChild(empty);
+  }
+
+  for (const feat of features) {
+    const row = document.createElement("div");
+    row.className = "evalFeatureRow " + (feat.covered ? "evalFeatCovered" : "evalFeatMissing");
+
+    const mark = feat.covered ? "✓" : "✗";
+    const evalTags = (feat.evals || [])
+      .map(e => `<span class="evalTag evalTag-${e.eval_type || "manual"}">${escapeHtml(e.eval_type || "?")}</span>`)
+      .join("");
+
+    const reqText = feat.text
+      ? (feat.text.length > 50 ? feat.text.slice(0, 50) + "…" : feat.text)
+      : feat.requirement_id;
+
+    row.innerHTML = `
+      <span class="evalMark">${mark}</span>
+      <span class="evalFeatText" title="${escapeHtml(feat.text || "")}">${escapeHtml(reqText)}</span>
+      <span class="evalTags">${evalTags || '<span class="evalNoEval">no eval</span>'}</span>
+    `;
+    list.appendChild(row);
+  }
+
+  // Toggle expand/collapse on header click
+  let expanded = true;
+  header.addEventListener("click", () => {
+    expanded = !expanded;
+    list.style.display = expanded ? "" : "none";
+    header.querySelector(".evalChevron").textContent = expanded ? "▾" : "▸";
+  });
+
+  section.appendChild(header);
+  section.appendChild(list);
+  return section;
 }
 
 async function ensureProject() {
