@@ -15,7 +15,7 @@ import re
 
 from app.agents.base import BaseAgent
 from app.registry.loader import AgentSpec, AgentLimits
-from app.sot.state import ApprovalStatus, ProjectState, QuestionItem, RequirementItem
+from app.sot.state import ApprovalStatus, MilestoneItem, ProjectState, QuestionItem, RequirementItem
 
 
 # ── Shared spec factory ───────────────────────────────────────────────────────
@@ -124,4 +124,58 @@ class MockSOWAgent(BaseAgent):
         return {
             "current_phase": "sow",
             "approvals_status": approvals,
+        }
+
+
+class MockCodingPlanAgent(BaseAgent):
+    """Returns a deterministic 2-milestone coding plan for testing."""
+
+    def __init__(self) -> None:
+        super().__init__(_mock_spec("MockCodingPlanAgent", "tech_lead"))
+
+    def run(self, state: ProjectState) -> dict:
+        approvals = {k: v.value for k, v in state.approvals_status.items()}
+        approvals["coding_plan"] = ApprovalStatus.PENDING.value
+        return {
+            "current_phase": "coding",
+            "coding_plan": [
+                MilestoneItem(
+                    name="Foundation & Auth",
+                    description="Core infrastructure, database models, and authentication.",
+                    stories=["story-001", "story-002"],
+                ).model_dump(),
+                MilestoneItem(
+                    name="Feature Implementation",
+                    description="Primary feature set as defined in PRD requirements.",
+                    stories=["story-003", "story-004"],
+                ).model_dump(),
+            ],
+            "current_milestone_index": 0,
+            "approvals_status": approvals,
+            "rejection_feedback": None,
+        }
+
+
+class MockMilestoneCodeAgent(BaseAgent):
+    """Returns a stub patch for the current milestone — no actual files written."""
+
+    def __init__(self) -> None:
+        super().__init__(_mock_spec("MockMilestoneCodeAgent", "engineer"))
+
+    def run(self, state: ProjectState) -> dict:
+        idx = state.current_milestone_index
+        plan = state.coding_plan
+        if not plan or idx >= len(plan):
+            return {}
+        milestone = plan[idx]
+        approval_key = f"milestone_{milestone.id}"
+        approvals = {k: v.value for k, v in state.approvals_status.items()}
+        approvals[approval_key] = ApprovalStatus.PENDING.value
+        updated_plan = [m.model_dump() for m in plan]
+        updated_plan[idx]["status"] = "in_progress"
+        return {
+            "current_phase": "milestone",
+            "coding_plan": updated_plan,
+            "approvals_status": approvals,
+            "rejection_feedback": None,
         }
