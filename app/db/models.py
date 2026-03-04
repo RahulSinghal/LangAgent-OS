@@ -650,6 +650,12 @@ class ComponentStore(Base):
     category: Mapped[str] = mapped_column(String(100), nullable=False, default="general", index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # content_hash: SHA-256 of (component_type + normalised content).
+    # Non-unique — each project stores its own rows; deduplication happens
+    # at retrieval time so the same text never appears twice in results.
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
     usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

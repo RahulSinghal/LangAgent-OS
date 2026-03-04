@@ -62,6 +62,7 @@ class ComponentResponse(BaseModel):
 class RetrieveRequest(BaseModel):
     tags: list[str]
     component_types: list[str] | None = None
+    exclude_project_id: int | None = None
     limit: int = 10
     min_overlap: int = 1
     include_summary: bool = False
@@ -113,6 +114,7 @@ def list_stored_components(
     component_type: str | None = None,
     category: str | None = None,
     source_project_id: int | None = None,
+    source: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[ComponentResponse]:
@@ -121,6 +123,7 @@ def list_stored_components(
         component_type=component_type,
         category=category,
         source_project_id=source_project_id,
+        source=source,
         limit=limit,
         offset=offset,
     )
@@ -175,6 +178,7 @@ def retrieve_components(
         db,
         query_tags=body.tags,
         component_types=body.component_types,
+        exclude_project_id=body.exclude_project_id,
         limit=body.limit,
         min_overlap=body.min_overlap,
     )

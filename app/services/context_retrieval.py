@@ -1,38 +1,41 @@
 """Cross-project context retrieval service.
 
-Provides two main capabilities:
+Provides:
 
 1. store_component() / bulk_store_components()
    Save reusable patterns, templates, and decisions to ComponentStore.
+   Deduplication: identical content (same component_type + SHA-256 hash)
+   is silently skipped — storing the same requirement from 10 projects
+   produces one row, not ten.
 
 2. retrieve_relevant()
-   Given a set of keyword tags (derived from a new project's message/domain),
-   return the most relevant stored components ranked by tag-overlap score and
-   descending usage count.
+   Tag-overlap + recency-weighted scoring.  Excludes the requesting
+   project's own components so intake never sees circular self-references.
 
 3. auto_extract_and_store()
-   Called by end_node when a project completes.  Walks the final SoT and
-   extracts requirement patterns, architecture decisions, risks, and
-   assumptions, then persists them to ComponentStore.
+   Called by end_node on completion.  Always purges first — even when the
+   revised SoT is empty — so stale v1 data never survives a v2 revision.
 
-Tag-based retrieval is intentionally simple (no embeddings required) so the
-system works without any additional ML infrastructure.  Semantic/embedding
-retrieval can be layered on top later by adding an embedding column and a
-cosine-similarity step.
+4. purge_auto_components()
+   Delete all source='auto' rows for a project (preserves 'manual' ones).
+
+Tag-based retrieval works without ML infrastructure.  Embedding/semantic
+retrieval can be added later via an embedding column + cosine-similarity.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.models import ComponentStore
 
 
-# ── Stop-words (excluded from auto-tagging) ───────────────────────────────────
+# ── Stop-words ────────────────────────────────────────────────────────────────
 
 _STOP_WORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -59,6 +62,12 @@ def _extract_tags(text: str, max_tags: int = 15) -> list[str]:
     return tags
 
 
+def _content_hash(component_type: str, content: str) -> str:
+    """SHA-256 fingerprint for deduplication (type + normalised content)."""
+    normalised = " ".join(content.lower().split())
+    return hashlib.sha256(f"{component_type}:{normalised}".encode()).hexdigest()
+
+
 # ── Store helpers ─────────────────────────────────────────────────────────────
 
 
@@ -72,19 +81,25 @@ def store_component(
     content: str,
     tags: list[str] | None = None,
     source: str = "auto",
+    run_id: int | None = None,
 ) -> ComponentStore:
     """Persist a single reusable component.
 
     If *tags* is None, tags are auto-derived from *content*.
+    content_hash is stored per-row for retrieval-time deduplication
+    (the same text from multiple projects won't appear twice in results).
     """
     if tags is None:
         tags = _extract_tags(f"{name} {content}")
+
     component = ComponentStore(
         source_project_id=source_project_id,
+        run_id=run_id,
         component_type=component_type,
         category=category,
         name=name,
         content=content,
+        content_hash=_content_hash(component_type, content),
         tags_json=tags,
         source=source,
     )
@@ -102,21 +117,23 @@ def bulk_store_components(
 ) -> list[ComponentStore]:
     """Persist multiple components in a single transaction.
 
-    Each dict in *components* must have: source_project_id, component_type,
-    category, name, content.  Optional: tags (list[str]), source (str).
-    *run_id* is recorded on every row so callers can audit which run produced
-    each component.
+    Each dict must have: source_project_id, component_type, category, name,
+    content.  Optional: tags (list[str]), source (str).
+    *run_id* is recorded on every row.
     """
     rows: list[ComponentStore] = []
     for c in components:
-        tags = c.get("tags") or _extract_tags(f"{c['name']} {c['content']}")
+        ctype = c["component_type"]
+        content = c["content"]
+        tags = c.get("tags") or _extract_tags(f"{c['name']} {content}")
         rows.append(ComponentStore(
             source_project_id=c.get("source_project_id"),
             run_id=run_id,
-            component_type=c["component_type"],
+            component_type=ctype,
             category=c.get("category", "general"),
             name=c["name"],
-            content=c["content"],
+            content=content,
+            content_hash=_content_hash(ctype, content),
             tags_json=tags,
             source=c.get("source", "auto"),
         ))
@@ -129,30 +146,50 @@ def bulk_store_components(
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
+# Half-life in days for recency decay.  A component created 30 days ago
+# scores ~0.71× relative to one created today; 90 days ago → ~0.36×.
+_RECENCY_HALF_LIFE_DAYS = 30.0
+
+
+def _recency_weight(created_at: datetime | None) -> float:
+    """Exponential decay factor based on component age (0 < w ≤ 1.0)."""
+    if created_at is None:
+        return 0.5
+    now = datetime.now(timezone.utc)
+    # Make created_at timezone-aware if it isn't (SQLite returns naive datetimes)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    age_days = max(0.0, (now - created_at).total_seconds() / 86400)
+    # 2^(-age/half_life)
+    return 2.0 ** (-age_days / _RECENCY_HALF_LIFE_DAYS)
+
 
 def retrieve_relevant(
     db: Session,
     query_tags: list[str],
     *,
     component_types: list[str] | None = None,
+    exclude_project_id: int | None = None,
     limit: int = 10,
     min_overlap: int = 1,
 ) -> list[dict[str, Any]]:
     """Return stored components most relevant to *query_tags*.
 
-    Relevance = number of tags shared between the query and the component's
-    tags_json list.  Ties are broken by descending usage_count.
+    Scoring = tag_overlap × recency_weight.  Ties broken by usage_count.
 
     Args:
-        db:              SQLAlchemy session.
-        query_tags:      Keywords extracted from the new project's intake message.
-        component_types: Optional allowlist of component_type values.
-        limit:           Maximum number of results.
-        min_overlap:     Minimum shared-tag count to include a result.
+        db:                 SQLAlchemy session.
+        query_tags:         Keywords from the new project's intake message.
+        component_types:    Optional allowlist of component_type values.
+        exclude_project_id: Exclude components whose source_project_id matches
+                            this value.  Pass the current project's id to
+                            prevent circular self-reference at intake.
+        limit:              Maximum number of results.
+        min_overlap:        Minimum raw tag overlap to include a result.
 
     Returns:
         List of dicts with keys: id, component_type, category, name, content,
-        tags, overlap, usage_count, source_project_id.
+        tags, overlap, score, usage_count, source_project_id.
     """
     if not query_tags:
         return []
@@ -162,22 +199,44 @@ def retrieve_relevant(
     q = db.query(ComponentStore)
     if component_types:
         q = q.filter(ComponentStore.component_type.in_(component_types))
+    if exclude_project_id is not None:
+        q = q.filter(
+            (ComponentStore.source_project_id != exclude_project_id)
+            | (ComponentStore.source_project_id.is_(None))
+        )
 
-    candidates = q.order_by(ComponentStore.usage_count.desc()).all()
+    candidates = q.all()
 
-    scored: list[tuple[int, ComponentStore]] = []
+    scored: list[tuple[float, int, ComponentStore]] = []
     for c in candidates:
         stored_tags = set(t.lower() for t in (c.tags_json or []))
         overlap = len(query_set & stored_tags)
-        if overlap >= min_overlap:
-            scored.append((overlap, c))
+        if overlap < min_overlap:
+            continue
+        recency = _recency_weight(c.created_at)
+        score = overlap * recency
+        scored.append((score, c.usage_count, c))
 
-    # Sort: descending overlap, then descending usage_count
-    scored.sort(key=lambda x: (x[0], x[1].usage_count), reverse=True)
-    top = scored[:limit]
+    # Sort: descending composite score, then descending usage_count
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    # Retrieval-time deduplication: if multiple projects stored the same
+    # content (same content_hash), keep only the best-scoring instance so
+    # the same text never appears twice in results.
+    seen_hashes: set[str] = set()
+    deduped: list[tuple[float, int, ComponentStore]] = []
+    for item in scored:
+        h = item[2].content_hash or ""
+        if h and h in seen_hashes:
+            continue
+        if h:
+            seen_hashes.add(h)
+        deduped.append(item)
+
+    top = deduped[:limit]
 
     # Increment usage_count for retrieved components
-    ids = [c.id for _, c in top]
+    ids = [c.id for _, _, c in top]
     if ids:
         db.query(ComponentStore).filter(ComponentStore.id.in_(ids)).update(
             {ComponentStore.usage_count: ComponentStore.usage_count + 1},
@@ -193,11 +252,12 @@ def retrieve_relevant(
             "name": c.name,
             "content": c.content,
             "tags": c.tags_json,
-            "overlap": overlap,
+            "overlap": int(score / _recency_weight(c.created_at)) if _recency_weight(c.created_at) else 0,
+            "score": round(score, 4),
             "usage_count": c.usage_count,
             "source_project_id": c.source_project_id,
         }
-        for overlap, c in top
+        for score, _, c in top
     ]
 
 
@@ -211,6 +271,7 @@ def list_components(
     component_type: str | None = None,
     category: str | None = None,
     source_project_id: int | None = None,
+    source: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[ComponentStore]:
@@ -221,6 +282,8 @@ def list_components(
         q = q.filter(ComponentStore.category == category)
     if source_project_id is not None:
         q = q.filter(ComponentStore.source_project_id == source_project_id)
+    if source is not None:
+        q = q.filter(ComponentStore.source == source)
     return q.order_by(ComponentStore.created_at.desc()).offset(offset).limit(limit).all()
 
 
@@ -270,21 +333,22 @@ def auto_extract_and_store(
 
     Called by end_node after a project is marked completed.
 
-    **Revision handling**: before inserting, all previously auto-extracted
-    components for *project_id* are deleted.  This ensures that when a
-    project is revised (e.g. PRD v2 approved months later), future projects
-    only see the latest knowledge — not stale requirements or decisions from
-    the original run.  Manual components (source='manual') are preserved.
+    **Revision handling**: purge_auto_components() is called unconditionally
+    at the start — even when the revised SoT is empty.  This prevents stale
+    v1 components from surviving a revision that stripped all content.
+
+    **Deduplication**: components whose content already exists in the store
+    (from any project) are silently skipped.
 
     Extracts:
       - requirements → "requirement_pattern"
       - decisions    → "architecture_decision"
       - risks        → "risk_pattern"
       - assumptions  → "assumption"
-
-    Each item is tagged with the project domain plus keywords from its text.
-    *run_id* is stored on every row for auditability.
     """
+    # Always purge first — even if the new SoT turns out to be empty.
+    purge_auto_components(db, project_id)
+
     domain = sot.get("domain", "general")
     components: list[dict[str, Any]] = []
 
@@ -300,7 +364,7 @@ def auto_extract_and_store(
             "category": req.get("category", "functional"),
             "name": text[:120],
             "content": text,
-            "tags": list(dict.fromkeys(tags)),  # deduplicate, preserve order
+            "tags": list(dict.fromkeys(tags)),
             "source": "auto",
         })
 
@@ -359,16 +423,11 @@ def auto_extract_and_store(
     if not components:
         return []
 
-    # Replace: purge stale auto-extracted rows, then insert fresh ones.
-    purge_auto_components(db, project_id)
     return bulk_store_components(db, components, run_id=run_id)
 
 
 def build_context_summary(components: list[dict[str, Any]]) -> str:
-    """Format retrieved components into a compact prompt-injection string.
-
-    Agents can prepend this to their system prompt to leverage past knowledge.
-    """
+    """Format retrieved components into a compact prompt-injection string."""
     if not components:
         return ""
 

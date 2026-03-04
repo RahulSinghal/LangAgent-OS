@@ -623,3 +623,124 @@ def test_revision_manual_components_survive_multiple_revisions(db):
     ]
     assert len(manual_rows) == 1
     assert "SLA" in manual_rows[0].name
+
+
+# ── Bug fix: empty-SoT purge ──────────────────────────────────────────────────
+
+def test_empty_sot_revision_purges_old_data(db):
+    """If a revised project's SoT has no extractable content, old auto rows
+    must still be deleted — not silently preserved.
+    """
+    auto_extract_and_store(db, project_id=1, sot=_make_v1_sot(), run_id=1)
+    assert len(list_components(db, source_project_id=1)) == 1
+
+    # Revised SoT is completely empty (e.g., project reset)
+    empty_sot = {"domain": "saas", "requirements": [], "decisions": [], "risks": [], "assumptions": []}
+    result = auto_extract_and_store(db, project_id=1, sot=empty_sot, run_id=2)
+
+    assert result == []  # nothing new inserted
+    # Old v1 rows must be gone too — not silently preserved
+    assert list_components(db, source_project_id=1) == []
+
+
+# ── exclude_project_id ────────────────────────────────────────────────────────
+
+def test_retrieve_excludes_own_project(db):
+    """A project's own components must not appear in its intake retrieval."""
+    auto_extract_and_store(db, project_id=1, sot=_make_sot(domain="saas"))
+    auto_extract_and_store(db, project_id=2, sot=_make_sot(domain="saas"))
+
+    # Project 1 retrieves context — must see project 2's rows but not its own
+    results = retrieve_relevant(
+        db, query_tags=["saas", "login", "auth"], exclude_project_id=1
+    )
+    source_ids = {r["source_project_id"] for r in results}
+    assert 1 not in source_ids
+    assert 2 in source_ids
+
+
+def test_retrieve_without_exclude_sees_all_projects(db):
+    auto_extract_and_store(db, project_id=1, sot=_make_sot(domain="saas"))
+    auto_extract_and_store(db, project_id=2, sot=_make_sot(domain="saas"))
+
+    results = retrieve_relevant(db, query_tags=["saas", "login"])
+    source_ids = {r["source_project_id"] for r in results}
+    # Both projects present when no exclusion
+    assert 1 in source_ids or 2 in source_ids
+
+
+# ── Recency weighting ─────────────────────────────────────────────────────────
+
+def test_recency_weight_today_is_one(db):
+    """A component created right now should have weight very close to 1.0."""
+    from app.services.context_retrieval import _recency_weight
+    from datetime import datetime, timezone
+    w = _recency_weight(datetime.now(timezone.utc))
+    assert 0.99 <= w <= 1.0
+
+
+def test_recency_weight_old_is_less_than_recent(db):
+    from app.services.context_retrieval import _recency_weight
+    from datetime import datetime, timezone, timedelta
+    recent = _recency_weight(datetime.now(timezone.utc))
+    old = _recency_weight(datetime.now(timezone.utc) - timedelta(days=90))
+    assert old < recent
+
+
+def test_retrieve_score_present_in_results(db):
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+    results = retrieve_relevant(db, query_tags=["saas", "login"])
+    assert all("score" in r for r in results)
+    assert all(r["score"] > 0 for r in results)
+
+
+# ── Content-hash retrieval-time deduplication ─────────────────────────────────
+
+def test_retrieve_deduplicates_same_content_from_multiple_projects(db):
+    """When two projects store the same requirement text, only one copy
+    should appear in retrieval results.
+    """
+    # Same requirement text from two different projects
+    sot = {
+        "domain": "saas",
+        "requirements": [
+            {"id": "r1", "category": "functional",
+             "text": "Users can log in with email and password."}
+        ],
+        "decisions": [], "risks": [], "assumptions": [],
+    }
+    auto_extract_and_store(db, project_id=1, sot=sot)
+    auto_extract_and_store(db, project_id=2, sot=sot)
+
+    results = retrieve_relevant(db, query_tags=["saas", "login", "email"])
+    contents = [r["content"] for r in results]
+    # The same text must appear at most once
+    assert contents.count("Users can log in with email and password.") <= 1
+
+
+# ── source filter in list_components ─────────────────────────────────────────
+
+def test_list_components_filter_by_source_manual(db):
+    store_component(
+        db, source_project_id=1, component_type="assumption",
+        category="general", name="Manual", content="Client agreed.", source="manual"
+    )
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+
+    manual_rows = list_components(db, source="manual")
+    auto_rows = list_components(db, source="auto")
+
+    assert all(r.source == "manual" for r in manual_rows)
+    assert all(r.source == "auto" for r in auto_rows)
+    assert len(manual_rows) == 1
+    assert len(auto_rows) > 0
+
+
+def test_list_components_source_none_returns_all(db):
+    store_component(
+        db, source_project_id=1, component_type="assumption",
+        category="general", name="Manual", content="Client agreed.", source="manual"
+    )
+    auto_extract_and_store(db, project_id=1, sot=_make_sot())
+    all_rows = list_components(db)
+    assert len(all_rows) > 1

@@ -54,6 +54,7 @@ def intake_normalize(state: dict) -> dict:
                 past_context = retrieve_relevant(
                     db,
                     query_tags=query_tags,
+                    exclude_project_id=sot.project_id,
                     limit=12,
                     min_overlap=1,
                 )
