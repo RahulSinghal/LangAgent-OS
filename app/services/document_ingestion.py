@@ -87,6 +87,16 @@ _SOW_SIGNALS_RE = re.compile(
     r"project deliverables?|milestone payment)\b",
     re.IGNORECASE,
 )
+_TECH_DESIGN_SIGNALS_RE = re.compile(
+    r"\b(technical (design|specification|architecture|spec)|system design|"
+    r"architecture (document|overview|diagram)|component diagram|"
+    r"api design|api specification|openapi|database schema|er diagram|"
+    r"entity[- ]relationship|data model|class diagram|sequence diagram|"
+    r"implementation plan|tech stack|infrastructure design|"
+    r"software architecture|design document|technical blueprint|"
+    r"system architecture|microservices|service mesh|deployment architecture)\b",
+    re.IGNORECASE,
+)
 
 # ── Gap-analysis configuration ─────────────────────────────────────────────────
 
@@ -102,6 +112,10 @@ _REQUIRED_SECTIONS: dict[str, list[str]] = {
     "sow": [
         "scope", "deliverables", "milestones",
         "payment terms", "assumptions", "risks",
+    ],
+    "technical_design": [
+        "architecture", "components", "data model",
+        "api", "tech stack", "non-functional requirements",
     ],
 }
 
@@ -121,6 +135,12 @@ _GAP_QUESTIONS: dict[str, str] = {
     "timeline":                   "What is the expected project timeline and go-live date?",
     "assumptions":                "What key assumptions underpin this document?",
     "risks":                      "What are the primary risks and proposed mitigations?",
+    # Technical design specific
+    "architecture":               "Can you describe the overall system architecture and main components?",
+    "components":                 "What are the key services/modules and how do they interact?",
+    "data model":                 "What are the primary data entities and their relationships?",
+    "api":                        "Are there existing APIs or integration points we should be aware of?",
+    "tech stack":                 "What is the preferred technology stack (language, framework, database)?",
 }
 
 
@@ -497,11 +517,20 @@ def detect_document_type(content: str, filename: str = "") -> str:
     if "sow" in name_lower or "statement_of_work" in name_lower or "statement-of-work" in name_lower:
         return "sow"
 
+    # Filename hints for technical design
+    if any(k in name_lower for k in (
+        "tech_design", "technical_design", "tech-design", "architecture",
+        "system_design", "system-design", "design_doc", "design-doc",
+        "tech_spec", "technical_spec",
+    )):
+        return "technical_design"
+
     # Content scoring — count signal matches
     scores: dict[str, int] = {
         "brd": len(_BRD_SIGNALS_RE.findall(content)),
         "prd": len(_PRD_SIGNALS_RE.findall(content)),
         "sow": len(_SOW_SIGNALS_RE.findall(content)),
+        "technical_design": len(_TECH_DESIGN_SIGNALS_RE.findall(content)),
     }
     best_type, best_score = max(scores.items(), key=lambda x: x[1])
     return best_type if best_score >= 2 else "unknown"

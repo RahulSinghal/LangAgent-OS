@@ -141,6 +141,8 @@ class RunStartRequest(BaseModel):
 
 class RunResumeRequest(BaseModel):
     user_message: str | None = None
+    document_content: str | None = None   # raw text of a document shared mid-conversation
+    document_filename: str | None = None  # original filename (used in summary)
 
 
 class RunResponse(OrmBase):

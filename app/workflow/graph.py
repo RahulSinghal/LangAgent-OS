@@ -4,7 +4,8 @@ Graph structure (Phase 4):
 
   [conditional_entry_point] ─── routes to right node based on current_phase
         │
-        ├─ intake  →  discovery  →  [pause→END | continue→market_eval]
+        ├─ intake  →  discovery  →  [pause→END | continue→market_eval | fast_track→coding_plan]
+        │                              ↑ fast_track fires when document_type == "technical_design"
         │
         ├─ market_eval → market_eval_gate → [waiting→END | approved→prd]
         │
@@ -64,7 +65,13 @@ def _route_entry(state: WorkflowState) -> str:
 # ── Conditional edge routers ──────────────────────────────────────────────────
 
 def _route_after_discovery(state: WorkflowState) -> str:
-    return "pause" if state.get("pause_reason") else "continue"
+    if state.get("pause_reason"):
+        return "pause"
+    # Fast-track technical design docs directly to coding plan, bypassing
+    # market_eval / PRD / commercials / SOW generation phases.
+    if state["sot"].get("document_type") == "technical_design":
+        return "fast_track"
+    return "continue"
 
 
 def _route_after_market_eval_gate(state: WorkflowState) -> str:
@@ -184,10 +191,11 @@ def build_graph() -> StateGraph:
     g.add_edge("end",          END)
 
     # Conditional edges — discovery
+    # "fast_track" skips market_eval/PRD/SOW when a technical design doc is present.
     g.add_conditional_edges(
         "discovery",
         _route_after_discovery,
-        {"pause": END, "continue": "market_eval"},
+        {"pause": END, "continue": "market_eval", "fast_track": "coding_plan"},
     )
 
     # Conditional edges — market_eval gate

@@ -263,6 +263,8 @@ def resume_run(
     run_id: int,
     user_message: str | None = None,
     approval_patch: dict | None = None,
+    document_content: str | None = None,
+    document_filename: str | None = None,
 ) -> Run:
     """Resume a paused run.
 
@@ -270,11 +272,21 @@ def resume_run(
     approval decision, then re-invokes the graph.  The conditional entry
     point routes the graph to the correct node based on current_phase.
 
+    When a document is shared mid-conversation (document_content provided),
+    the document is ingested and the current phase may be advanced:
+      - technical_design: stays in discovery (gap Q&A), then fast-tracks to
+        coding_plan when discovery completes (bypassing market_eval/PRD/SOW).
+      - prd: jumps to prd_gate, skipping discovery and market_eval.
+      - sow: jumps to sow_gate, skipping earlier phases.
+      - brd: stays in current phase; gap questions injected into state.
+
     Args:
-        db:              Active DB session.
-        run_id:          Run to resume.
-        user_message:    User's answer to the last discovery question.
-        approval_patch:  e.g. {"prd": "approved"} — injected by approval service.
+        db:                Active DB session.
+        run_id:            Run to resume.
+        user_message:      User's answer to the last discovery question.
+        approval_patch:    e.g. {"prd": "approved"} — injected by approval service.
+        document_content:  Raw text of a document shared mid-conversation.
+        document_filename: Original filename of the uploaded document.
 
     Returns:
         The updated Run ORM object.
@@ -296,15 +308,53 @@ def resume_run(
     if sot is None:
         raise ValueError(f"No snapshot found for run {run_id}")
 
+    # ── Mid-conversation document ingestion (optional) ────────────────────────
+    combined_message: str | None = user_message
+    if document_content:
+        from app.services.document_ingestion import ingest_document
+        ingestion = ingest_document(document_content, filename=document_filename or "")
+        doc_sot_patch = ingestion.get("sot_patch", {})
+        doc_type = ingestion.get("document_type", "unknown")
+        doc_summary = ingestion.get("summary_message", "")
+
+        # Merge extracted data into SoT immediately
+        if doc_sot_patch:
+            sot = apply_patch(sot, doc_sot_patch)
+
+        # Build combined message so the user note + doc summary are both captured
+        if doc_summary:
+            combined_message = (
+                f"{doc_summary}\n\nUser note: {user_message}" if user_message else doc_summary
+            )
+
+        # ── Phase-skip logic ───────────────────────────────────────────────────
+        # Only advance phase if we are still in an early-enough phase to benefit.
+        _BEFORE_PRD = {"init", "discovery", "market_eval"}
+        _BEFORE_SOW = {"init", "discovery", "market_eval", "prd", "commercials"}
+        _IN_DISCOVERY = {"init", "discovery"}
+        current = sot.current_phase.value
+
+        if doc_type == "prd" and current in _BEFORE_PRD:
+            # Uploaded PRD replaces the generation phase — jump straight to gate.
+            sot = apply_patch(sot, {"current_phase": "prd"})
+        elif doc_type == "sow" and current in _BEFORE_SOW:
+            # Uploaded SOW replaces generation — jump straight to gate.
+            sot = apply_patch(sot, {"current_phase": "sow"})
+        elif doc_type == "technical_design" and current in _IN_DISCOVERY:
+            # Stay in discovery for gap Q&A; document_type flag already set.
+            # _route_after_discovery will fast-track to coding_plan on completion.
+            pass
+        # brd / unknown: no phase change — gap questions injected via sot_patch
+
     # Apply incoming context
     patch: dict = {}
-    if user_message is not None:
-        patch["last_user_message"] = user_message
+    if combined_message is not None:
+        patch["last_user_message"] = combined_message
         # Save to conversation history when resuming from waiting_user
-        if run.session_id and user_message:
+        if run.session_id and combined_message:
             try:
                 from app.services.sessions import add_message
-                add_message(db, session_id=run.session_id, role="user", content=user_message)
+                add_message(db, session_id=run.session_id, role="user", content=combined_message)
             except Exception:
                 pass
     if approval_patch:

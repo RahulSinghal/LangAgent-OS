@@ -69,7 +69,13 @@ def resume_run(
         )
 
     try:
-        updated = run_svc.resume_run(db, run_id, user_message=body.user_message)
+        updated = run_svc.resume_run(
+            db,
+            run_id,
+            user_message=body.user_message,
+            document_content=body.document_content,
+            document_filename=body.document_filename,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
