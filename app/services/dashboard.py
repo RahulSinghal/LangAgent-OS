@@ -6,6 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.models import Approval, Artifact, Message, Project, Run, RunMetrics, Session as DbSession
+from app.services.eval_report import build_eval_report
 
 
 def list_project_dashboard_rows(db: Session) -> list[dict]:
@@ -79,6 +80,17 @@ def list_project_dashboard_rows(db: Session) -> list[dict]:
             current_state = latest_run.current_node or latest_run.status
             run_status = latest_run.status
 
+        try:
+            report = build_eval_report(db, p.id)
+            summary = report.get("summary", {})
+            total_features = summary.get("total_features", 0)
+            covered = summary.get("covered_features", 0)
+            eval_coverage_pct: float | None = (
+                round(covered / total_features * 100, 1) if total_features > 0 else None
+            )
+        except Exception:
+            eval_coverage_pct = None
+
         rows.append(
             {
                 "project_id": p.id,
@@ -94,6 +106,7 @@ def list_project_dashboard_rows(db: Session) -> list[dict]:
                 "system_runtime_ms": int(total_runtime_ms or 0),
                 "system_hours": float(total_runtime_ms or 0) / 3_600_000.0,
                 "last_activity_at": last_activity,
+                "eval_coverage_pct": eval_coverage_pct,
             }
         )
 

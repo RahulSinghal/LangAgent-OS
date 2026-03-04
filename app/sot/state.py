@@ -155,6 +155,8 @@ class MilestoneItem(BaseModel):
     stories: list[str] = Field(default_factory=list)      # backlog story refs in scope
     status: str = "pending"                               # pending|in_progress|approved|rejected
     code_artifact_path: str | None = None                 # path written by MilestoneCodeAgent
+    expected_evals: list[str] = Field(default_factory=list)
+    # e.g. ["unit: auth service", "e2e: login flow", "integration: DB session"]
 
 
 # ── Phase 3 stub models ───────────────────────────────────────────────────────

@@ -143,11 +143,22 @@ class MockCodingPlanAgent(BaseAgent):
                     name="Foundation & Auth",
                     description="Core infrastructure, database models, and authentication.",
                     stories=["story-001", "story-002"],
+                    expected_evals=[
+                        "unit: user model validation",
+                        "unit: password hashing",
+                        "integration: auth token lifecycle",
+                        "e2e: login flow",
+                    ],
                 ).model_dump(),
                 MilestoneItem(
                     name="Feature Implementation",
                     description="Primary feature set as defined in PRD requirements.",
                     stories=["story-003", "story-004"],
+                    expected_evals=[
+                        "unit: feature business logic",
+                        "integration: API endpoints",
+                        "e2e: end-to-end user journey",
+                    ],
                 ).model_dump(),
             ],
             "current_milestone_index": 0,

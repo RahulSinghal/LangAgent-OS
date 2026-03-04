@@ -237,6 +237,7 @@ def build_eval_report(
                 "name": milestone.name,
                 "description": milestone.description,
                 "status": milestone.status,
+                "expected_evals": list(milestone.expected_evals),
                 "features": features_out,
                 "coverage": {
                     "total": total_count,
@@ -266,6 +267,32 @@ def build_eval_report(
         + sum(1 for f in ungrouped if f["covered"])
     )
 
+    # ── Type breakdown: { "unit": {"covered": N, "total": N}, ... }
+    _EVAL_TYPES = ("unit", "integration", "e2e", "contract", "manual")
+    type_totals: dict[str, int] = {t: 0 for t in _EVAL_TYPES}
+    type_covered: dict[str, int] = {t: 0 for t in _EVAL_TYPES}
+
+    all_feature_lists = (
+        [f for ms in milestones_out for f in ms["features"]] + ungrouped
+    )
+    for feat in all_feature_lists:
+        types_in_feat: set[str] = set()
+        for ev in feat["evals"]:
+            et = ev.get("eval_type") or "manual"
+            if et not in type_totals:
+                type_totals[et] = 0
+                type_covered[et] = 0
+            types_in_feat.add(et)
+        for et in types_in_feat:
+            type_totals[et] += 1
+            type_covered[et] += 1  # feature is covered by this type
+
+    type_breakdown = {
+        et: {"covered": type_covered[et], "total": type_totals[et]}
+        for et in type_totals
+        if type_totals[et] > 0
+    }
+
     return {
         "project_id": project_id,
         "milestones": milestones_out,
@@ -277,6 +304,7 @@ def build_eval_report(
             "coverage_pct": (
                 round(covered_features / total_features * 100, 1) if total_features else 0.0
             ),
+            "type_breakdown": type_breakdown,
         },
     }
 
@@ -307,6 +335,13 @@ def build_eval_report_md(report: dict) -> str:
         "",
     ]
 
+    breakdown = summary.get("type_breakdown", {})
+    if breakdown:
+        lines += ["### Coverage by eval type", "", "| Type | Covered features |", "|---|---|"]
+        for et, counts in breakdown.items():
+            lines.append(f"| {et} | {counts['covered']} |")
+        lines.append("")
+
     for ms in report["milestones"]:
         cov = ms["coverage"]
         lines += [
@@ -319,6 +354,9 @@ def build_eval_report_md(report: dict) -> str:
             f"_{ms['description']}_",
             "",
         ]
+
+        if ms.get("expected_evals"):
+            lines += ["**Expected evals:** " + ", ".join(f"`{e}`" for e in ms["expected_evals"]), ""]
 
         if not ms["features"]:
             lines += ["_No features linked to this milestone._", ""]
@@ -448,4 +486,5 @@ def _link_to_eval_dict(lnk: TraceLink) -> dict:
         "source": lnk.source,
         "link_type": lnk.link_type,
         "notes": lnk.notes,
+        "last_run_status": lnk.last_run_status,
     }

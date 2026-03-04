@@ -14,8 +14,26 @@ Phase 4 adds:
 
 from __future__ import annotations
 
+from app.core.config import settings
 from app.sot.patch import apply_patch
 from app.sot.state import ApprovalStatus, ProjectState
+
+
+def _eval_coverage_for_milestone(project_id: int | None, milestone_id: str) -> float:
+    """Return eval coverage % (0-100) for one milestone. Returns 0.0 on error."""
+    if project_id is None:
+        return 0.0
+    try:
+        from app.db.session import SessionLocal
+        from app.services.eval_report import build_eval_report
+        with SessionLocal() as db:
+            report = build_eval_report(db, project_id)
+            for ms in report.get("milestones", []):
+                if ms["milestone_id"] == milestone_id:
+                    return float(ms["coverage"].get("pct", 0.0))
+    except Exception:
+        pass
+    return 0.0
 
 
 def _load_rejection_comment(run_id: int | None, approval_type: str) -> str:
@@ -237,11 +255,21 @@ def milestone_approval_gate(state: dict) -> dict:
         current_approvals[approval_key] = ApprovalStatus.PENDING.value
         sot = apply_patch(sot, {"approvals_status": current_approvals})
 
+    # Check eval coverage and optionally block if below threshold
+    coverage_pct = _eval_coverage_for_milestone(state.get("project_id"), milestone.id)
+    threshold = settings.MIN_EVAL_COVERAGE_PCT
+    coverage_note = f" Eval coverage: {coverage_pct:.0f}%."
+    if threshold > 0 and coverage_pct < threshold:
+        coverage_note = (
+            f" ⚠ Eval coverage {coverage_pct:.0f}% is below the required {threshold:.0f}%."
+            " Add tests before approving."
+        )
+
     return {
         "sot": sot.model_dump_jsonb(),
         "pause_reason": "waiting_approval",
         "bot_response": (
             f"Milestone '{milestone.name}' ({idx + 1}/{len(plan)}) is ready for "
-            "tech lead review. POST to /approvals/{id}/resolve to continue."
+            f"tech lead review. POST to /approvals/{{id}}/resolve to continue.{coverage_note}"
         ),
     }

@@ -60,6 +60,7 @@ class ProjectDashboardRow(BaseModel):
     system_runtime_ms: int = 0
     system_hours: float = 0.0
     last_activity_at: datetime | None = None
+    eval_coverage_pct: float | None = None
 
 
 class ProjectDashboardList(BaseModel):

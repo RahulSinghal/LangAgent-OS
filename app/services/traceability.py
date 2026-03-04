@@ -60,6 +60,25 @@ def create_trace_link(
     return link
 
 
+def update_trace_link_status(
+    db: Session,
+    link_id: int,
+    last_run_status: str | None,
+) -> TraceLink | None:
+    """Update the last_run_status of a trace link (pass/fail/skip/None).
+
+    Returns:
+        Updated TraceLink, or None if not found.
+    """
+    link = db.get(TraceLink, link_id)
+    if link is None:
+        return None
+    link.last_run_status = last_run_status
+    db.commit()
+    db.refresh(link)
+    return link
+
+
 def delete_trace_link(db: Session, link_id: int) -> bool:
     """Delete a trace link by its DB id.
 

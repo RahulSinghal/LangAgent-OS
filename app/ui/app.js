@@ -242,6 +242,7 @@ async function refreshDashboard() {
         <th>State</th>
         <th>Artifacts</th>
         <th>Approvals</th>
+        <th>Eval Cov.</th>
         <th>Tokens</th>
         <th>Cost</th>
         <th>System hours</th>
@@ -277,11 +278,17 @@ async function refreshDashboard() {
             .join(" · ")
         : "—";
 
+      const covPct = r.eval_coverage_pct;
+      const covHtml = covPct == null
+        ? '<span class="mono subtle">—</span>'
+        : `<span class="evalCovBadge ${covPct >= 80 ? 'evalOk' : covPct >= 40 ? 'evalWarn' : 'evalBad'}">${covPct}%</span>`;
+
       tr.innerHTML = `
       <td><div><strong>${escapeHtml(r.name)}</strong></div></td>
       <td><span class="pill">${escapeHtml(r.current_state || "—")}</span></td>
       <td class="mono">${artifactHtml}</td>
       <td><span class="pill">${Number(r.pending_approvals || 0)} pending</span></td>
+      <td class="mono">${covHtml}</td>
       <td class="mono">${Number(r.tokens_spent || 0)}</td>
       <td class="mono">${fmtMoney(r.cost_usd || 0)}</td>
       <td class="mono">${fmtHours(r.system_hours || 0)}</td>
@@ -696,6 +703,18 @@ async function loadEvalReport(projectId) {
 
   body.innerHTML = "";
 
+  // Type breakdown row
+  const breakdown = s.type_breakdown || {};
+  const breakdownTypes = Object.keys(breakdown);
+  if (breakdownTypes.length) {
+    const bRow = document.createElement("div");
+    bRow.className = "evalTypeBreakdown";
+    bRow.innerHTML = breakdownTypes.map(et =>
+      `<span class="evalTag evalTag-${et}">${et}: ${breakdown[et].covered}</span>`
+    ).join(" ");
+    body.appendChild(bRow);
+  }
+
   const milestones = report.milestones || [];
   const ungrouped  = report.ungrouped_features || [];
 
@@ -746,6 +765,17 @@ function _evalMilestoneEl(ms) {
   const list = document.createElement("div");
   list.className = "evalFeatureList";
 
+  // Show expected evals if defined
+  const expectedEvals = ms.expected_evals || [];
+  if (expectedEvals.length) {
+    const expRow = document.createElement("div");
+    expRow.className = "evalExpected";
+    expRow.innerHTML = `<span class="evalExpectedLabel">Expected:</span> ${
+      expectedEvals.map(e => `<span class="evalTag evalTag-${e.split(":")[0].trim()}">${escapeHtml(e)}</span>`).join(" ")
+    }`;
+    list.appendChild(expRow);
+  }
+
   const features = ms.features || [];
   if (!features.length) {
     const empty = document.createElement("div");
@@ -760,7 +790,15 @@ function _evalMilestoneEl(ms) {
 
     const mark = feat.covered ? "✓" : "✗";
     const evalTags = (feat.evals || [])
-      .map(e => `<span class="evalTag evalTag-${e.eval_type || "manual"}">${escapeHtml(e.eval_type || "?")}</span>`)
+      .map(e => {
+        const statusCls = e.last_run_status === "pass" ? "evalStatusPass"
+                        : e.last_run_status === "fail" ? "evalStatusFail"
+                        : e.last_run_status === "skip" ? "evalStatusSkip" : "";
+        const statusIcon = e.last_run_status === "pass" ? " ✓"
+                         : e.last_run_status === "fail" ? " ✗"
+                         : e.last_run_status === "skip" ? " ⊘" : "";
+        return `<span class="evalTag evalTag-${e.eval_type || "manual"} ${statusCls}" title="${escapeHtml(e.test_id)}">${escapeHtml(e.eval_type || "?")}${statusIcon}</span>`;
+      })
       .join("");
 
     const reqText = feat.text

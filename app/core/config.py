@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # "suggest" — DeepWorkAgent runs but results are advisory only (default)
     # "auto"    — DeepWorkAgent output directly applied to SoT
 
+    # ── Eval coverage gate ────────────────────────────────────────
+    # Minimum eval coverage % required to approve a milestone.
+    # 0.0 = warn only (default). 80.0 = block if < 80% covered.
+    MIN_EVAL_COVERAGE_PCT: float = 0.0
+
     # ── Testing / Deterministic mode ──────────────────────────────
     USE_MOCK_AGENTS: bool = False
 

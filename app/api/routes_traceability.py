@@ -21,6 +21,7 @@ from app.services.traceability import (
     delete_trace_link,
     get_traceability_matrix,
     list_trace_links,
+    update_trace_link_status,
 )
 
 router = APIRouter(tags=["traceability"])
@@ -47,8 +48,13 @@ class TraceLinkResponse(BaseModel):
     eval_type: str | None = None
     source: str = "manual"
     notes: str | None = None
+    last_run_status: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class TraceLinkStatusUpdate(BaseModel):
+    last_run_status: str | None  # "pass" | "fail" | "skip" | None
 
 
 class TraceabilityMatrixResponse(BaseModel):
@@ -110,6 +116,22 @@ def traceability_matrix(
 ) -> TraceabilityMatrixResponse:
     matrix_data = get_traceability_matrix(db, project_id)
     return TraceabilityMatrixResponse(**matrix_data)
+
+
+@router.patch(
+    "/traceability/{link_id}/status",
+    response_model=TraceLinkResponse,
+    summary="Update the pass/fail status of a trace link",
+)
+def set_link_status(
+    link_id: int,
+    body: TraceLinkStatusUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> TraceLinkResponse:
+    link = update_trace_link_status(db, link_id, body.last_run_status)
+    if link is None:
+        raise HTTPException(status_code=404, detail=f"Trace link {link_id} not found")
+    return TraceLinkResponse.model_validate(link)
 
 
 @router.delete(
