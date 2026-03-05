@@ -78,10 +78,12 @@ class SOWAgent(BaseAgent):
         feedback_ctx: str,
     ) -> list[dict[str, Any]]:
         """LLM: draft SOW sections as a structured list."""
+        past_ctx = self._past_context_block(state.past_context)
         system = (
             "You are a senior engagement manager drafting a Statement of Work. "
             "Generate a comprehensive SOW as a JSON array of sections.\n\n"
-            'Each section: {"title": "...", "content": "..."}\n\n'
+            + past_ctx
+            + 'Each section: {"title": "...", "content": "..."}\n\n'
             "Required sections (in order):\n"
             "1. Executive Summary\n"
             "2. Project Scope\n"

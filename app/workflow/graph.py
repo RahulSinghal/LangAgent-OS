@@ -1,6 +1,6 @@
-"""LangGraph workflow graph — Phase 4.
+"""LangGraph workflow graph — Phase 4 (Phase 3 readiness added).
 
-Graph structure (Phase 4):
+Graph structure:
 
   [conditional_entry_point] ─── routes to right node based on current_phase
         │
@@ -12,11 +12,20 @@ Graph structure (Phase 4):
         │
         ├─ market_eval → market_eval_gate → [waiting→END | approved→prd]
         │
-        ├─ prd    →  prd_gate   →  [waiting→END | rejected→prd | approved→commercials]
+        ├─ prd    →  prd_gate       → [waiting→END | rejected→prd | approved→commercials]
         │
         ├─ commercials → commercials_gate → [waiting→END | rejected→commercials | approved→sow]
         │
-        ├─ sow    →  sow_gate   →  [waiting→END | rejected→sow | approved→end]
+        ├─ sow    →  sow_gate       → [waiting→END | rejected→sow | approved→coding_plan]
+        │
+        ├─ coding_plan → coding_plan_gate → [waiting→END | rejected→coding_plan
+        │                                     | approved→coding_milestone]
+        │
+        ├─ coding_milestone → milestone_gate → [waiting→END | rejected→coding_milestone
+        │                                        | next_milestone→coding_milestone
+        │                                        | all_done→readiness]
+        │
+        ├─ readiness → readiness_gate → [waiting→END | rejected→readiness | approved→end]
         │
         └─ end    →  END
 
@@ -61,6 +70,7 @@ def _route_entry(state: WorkflowState) -> str:
         "sow":         "sow_gate",           # re-enter at gate; skip re-generation
         "coding":      "coding_plan_gate",   # re-enter at plan gate on resume
         "milestone":   "milestone_gate",     # re-enter at milestone gate on resume
+        "readiness":   "readiness_gate",     # re-enter at readiness gate on resume
         "completed":   "end",
     }.get(phase, "intake")
 
@@ -135,7 +145,15 @@ def _route_after_milestone_gate(state: WorkflowState) -> str:
     plan = sot.get("coding_plan", [])
     if idx < len(plan):
         return "next_milestone"
-    return "all_done"
+    return "all_done"  # → readiness phase
+
+
+def _route_after_readiness_gate(state: WorkflowState) -> str:
+    if state.get("pause_reason"):
+        return "waiting"
+    if state["sot"].get("rejection_feedback"):
+        return "rejected"
+    return "approved"
 
 
 # ── Graph builder ─────────────────────────────────────────────────────────────
@@ -153,10 +171,12 @@ def build_graph() -> StateGraph:
         sow_approval_gate,
         coding_plan_approval_gate,
         milestone_approval_gate,
+        readiness_approval_gate,
     )
     from app.workflow.nodes.sow import sow_phase
     from app.workflow.nodes.coding_plan import coding_plan_phase
     from app.workflow.nodes.coding_milestone import coding_milestone_phase
+    from app.workflow.nodes.readiness import readiness_phase
     from app.workflow.nodes.end import end_node
 
     g = StateGraph(WorkflowState)
@@ -176,6 +196,8 @@ def build_graph() -> StateGraph:
     g.add_node("coding_plan_gate",  coding_plan_approval_gate)
     g.add_node("coding_milestone",  coding_milestone_phase)
     g.add_node("milestone_gate",    milestone_approval_gate)
+    g.add_node("readiness",         readiness_phase)
+    g.add_node("readiness_gate",    readiness_approval_gate)
     g.add_node("end",               end_node)
 
     # Conditional entry — routes to correct node on start OR resume
@@ -190,19 +212,21 @@ def build_graph() -> StateGraph:
             "sow_gate":          "sow_gate",
             "coding_plan_gate":  "coding_plan_gate",
             "milestone_gate":    "milestone_gate",
+            "readiness_gate":    "readiness_gate",
             "end":               "end",
         },
     )
 
     # Fixed edges
-    g.add_edge("intake",       "discovery")
-    g.add_edge("market_eval",  "market_eval_gate")
-    g.add_edge("prd",          "prd_gate")
-    g.add_edge("commercials",  "commercials_gate")
-    g.add_edge("sow",          "sow_gate")
-    g.add_edge("coding_plan",  "coding_plan_gate")
+    g.add_edge("intake",           "discovery")
+    g.add_edge("market_eval",      "market_eval_gate")
+    g.add_edge("prd",              "prd_gate")
+    g.add_edge("commercials",      "commercials_gate")
+    g.add_edge("sow",              "sow_gate")
+    g.add_edge("coding_plan",      "coding_plan_gate")
     g.add_edge("coding_milestone", "milestone_gate")
-    g.add_edge("end",          END)
+    g.add_edge("readiness",        "readiness_gate")
+    g.add_edge("end",              END)
 
     # Conditional edges — discovery
     # Each fast_* key skips intermediate phases when the user has already provided
@@ -256,16 +280,23 @@ def build_graph() -> StateGraph:
         {"waiting": END, "rejected": "coding_plan", "approved": "coding_milestone"},
     )
 
-    # Conditional edges — milestone gate (loop or finish)
+    # Conditional edges — milestone gate (loop or finish → readiness)
     g.add_conditional_edges(
         "milestone_gate",
         _route_after_milestone_gate,
         {
-            "waiting":       END,
-            "rejected":      "coding_milestone",   # redo current milestone
+            "waiting":        END,
+            "rejected":       "coding_milestone",  # redo current milestone
             "next_milestone": "coding_milestone",  # advance index, loop back
-            "all_done":      "end",                # all milestones approved
+            "all_done":       "readiness",         # all milestones approved → deploy readiness
         },
+    )
+
+    # Conditional edges — readiness gate
+    g.add_conditional_edges(
+        "readiness_gate",
+        _route_after_readiness_gate,
+        {"waiting": END, "rejected": "readiness", "approved": "end"},
     )
 
     return g

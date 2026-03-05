@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     # ── Storage ──────────────────────────────────────────────────
     ARTIFACTS_DIR: str = "./storage/artifacts"
 
+    # ── Phase 2: Web tools ────────────────────────────────────────
+    # Set TAVILY_API_KEY to enable real web search (https://tavily.com).
+    # If empty, web_search falls back to deterministic stub results.
+    TAVILY_API_KEY: str = ""
+    # Timeout (seconds) for fetch_url via httpx. Falls back to stub if httpx
+    # is not installed or FETCH_URL_TIMEOUT is 0.
+    FETCH_URL_TIMEOUT: int = 10
+
     # ── Phase 2: Deep Agent ───────────────────────────────────────
     DEEP_MODE: str = "suggest"  # "off" | "suggest" | "auto"
     # "off"     — DeepWorkAgent never runs automatically

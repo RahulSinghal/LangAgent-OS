@@ -168,6 +168,11 @@ def coding_plan_approval_gate(state: dict) -> dict:
     return _gate(state, "coding_plan")
 
 
+def readiness_approval_gate(state: dict) -> dict:
+    """Gate that pauses until the deployment readiness checklist is approved."""
+    return _gate(state, "readiness")
+
+
 def milestone_approval_gate(state: dict) -> dict:
     """Per-milestone tech lead review gate.
 

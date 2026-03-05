@@ -70,10 +70,12 @@ class CommercialAgent(BaseAgent):
         feedback_ctx: str,
     ) -> dict[str, Any]:
         """LLM: generate pricing model, milestones, team composition."""
+        past_ctx = self._past_context_block(state.past_context)
         system = (
             "You are an experienced engagement manager at a consulting firm. "
             "Generate a commercial proposal for the described project.\n\n"
-            "Return JSON:\n"
+            + past_ctx
+            + "Return JSON:\n"
             '{"commercial_model": "T&M | Fixed | Hybrid — brief description", '
             '"milestones": [{"name": "...", "duration": "...", '
             '"deliverables": ["..."], "payment_pct": 25}], '

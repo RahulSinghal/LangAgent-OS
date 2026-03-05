@@ -90,10 +90,12 @@ class PRDAgent(BaseAgent):
         feedback_ctx: str,
     ) -> dict[str, Any]:
         """LLM: generate a structured project scope from requirements."""
+        past_ctx = self._past_context_block(state.past_context)
         system = (
             "You are a senior business analyst. "
             "Generate a structured project scope from the gathered requirements.\n\n"
-            "Return JSON:\n"
+            + past_ctx
+            + "Return JSON:\n"
             '{"summary": "one-sentence description", '
             '"in_scope": ["..."], '
             '"out_of_scope": ["..."], '

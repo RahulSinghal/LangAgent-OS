@@ -76,10 +76,12 @@ class CodingPlanAgent(BaseAgent):
         feedback_ctx: str,
     ) -> list[MilestoneItem]:
         """LLM: divide the backlog into ordered, independently-deliverable milestones."""
+        past_ctx = self._past_context_block(state.past_context)
         system = (
             "You are a senior tech lead planning a software delivery. "
             "Divide the approved work into logical, sequential coding milestones.\n\n"
-            "Return a JSON array. Each item:\n"
+            + past_ctx
+            + "Return a JSON array. Each item:\n"
             '{"name": "...", "description": "...", "stories": ["story ref 1", ...]}\n\n'
             "Guidelines:\n"
             "- 3–6 milestones total.\n"

@@ -6,9 +6,11 @@ Phase 1 tools:
   read_file   — read a local file by path
   write_file  — write content to a local file
 
-Phase 2 tools (stubs — will call real APIs when keys are configured):
-  web_search  — keyword search returning mock results (stub)
-  fetch_url   — fetch URL content, return as text (stub)
+Phase 2 tools:
+  web_search  — keyword search via Tavily API (falls back to stubs when
+                TAVILY_API_KEY is not set)
+  fetch_url   — fetch URL content via httpx (falls back to stub when httpx
+                is not installed or FETCH_URL_TIMEOUT == 0)
 
 Phase 3 additions: mcp_adapter tools
 """
@@ -47,7 +49,8 @@ def _write_file(payload: dict) -> str:
 
 
 def _web_search(payload: dict) -> list[dict]:
-    """Phase 2: Web search stub — returns deterministic mock results.
+    """Phase 2: Web search — uses Tavily API when TAVILY_API_KEY is set,
+    otherwise returns deterministic stub results.
 
     Payload keys:
         query       (str): Search query string.
@@ -55,11 +58,41 @@ def _web_search(payload: dict) -> list[dict]:
 
     Returns:
         list of {title, url, snippet} dicts.
-
-    Note: Replace with real Tavily/SerpAPI integration when API keys are set.
     """
     query = payload.get("query", "")
     max_results = int(payload.get("max_results", 5))
+
+    try:
+        from app.core.config import settings
+        api_key = settings.TAVILY_API_KEY
+    except Exception:
+        api_key = ""
+
+    if api_key:
+        try:
+            import httpx
+            resp = httpx.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": r.get("content", ""),
+                }
+                for r in data.get("results", [])[:max_results]
+            ]
+        except Exception:
+            pass  # fall through to stub
 
     stub_results = [
         {
@@ -91,23 +124,42 @@ def _web_search(payload: dict) -> list[dict]:
 
 
 def _fetch_url(payload: dict) -> str:
-    """Phase 2: URL fetch stub — returns mock content for the given URL.
+    """Phase 2: Fetch URL content via httpx, falling back to a stub when httpx
+    is not installed or FETCH_URL_TIMEOUT is 0.
 
     Payload keys:
         url     (str): URL to fetch.
-        timeout (int, optional): Request timeout in seconds (default 10).
+        timeout (int, optional): Override request timeout in seconds.
 
     Returns:
-        Page content as a string.
-
-    Note: Replace with real httpx/requests call when needed.
+        Page text content as a string.
     """
     url = payload.get("url", "")
-    return (
-        f"[STUB] Content fetched from {url}\n\n"
-        "This is a stub response. Configure real HTTP fetching "
-        "by replacing _fetch_url with an httpx implementation."
-    )
+
+    try:
+        from app.core.config import settings
+        timeout = int(payload.get("timeout", settings.FETCH_URL_TIMEOUT))
+    except Exception:
+        timeout = int(payload.get("timeout", 10))
+
+    if timeout == 0:
+        return (
+            f"[STUB] Content fetched from {url}\n\n"
+            "Set FETCH_URL_TIMEOUT > 0 to enable real HTTP fetching."
+        )
+
+    try:
+        import httpx
+        resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.text
+    except ImportError:
+        return (
+            f"[STUB] Content fetched from {url}\n\n"
+            "Install httpx (`pip install httpx`) to enable real URL fetching."
+        )
+    except Exception as exc:
+        return f"[ERROR] Failed to fetch {url}: {exc}"
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────

@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from app.agents.prd_agent import PRDAgent
 from app.agents.mock_agents import MockPRDAgent
+from app.agents.qa_auditor import QAAuditorAgent
 from app.core.runtime import use_mock_agents
 from app.sot.state import ProjectState
 
 
 def prd_phase(state: dict) -> dict:
-    """Execute PRDAgent and update SoT with PRD phase state.
+    """Execute PRDAgent (then QAAuditorAgent) and update SoT.
 
     Args:
         state: WorkflowState dict.
@@ -25,6 +26,10 @@ def prd_phase(state: dict) -> dict:
 
     agent = MockPRDAgent() if use_mock_agents() else PRDAgent()
     new_sot = agent.execute(sot)
+
+    # QA audit runs in real mode only — advisory, never blocks.
+    if not use_mock_agents():
+        new_sot = QAAuditorAgent().execute(new_sot)
 
     return {
         "sot": new_sot.model_dump_jsonb(),

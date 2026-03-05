@@ -91,6 +91,24 @@ class BaseAgent(ABC):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _past_context_block(past_context: list[dict], max_items: int = 5) -> str:
+        """Format past_context items from ComponentStore into a prompt block.
+
+        Caps at max_items to avoid token bloat.  Returns an empty string when
+        past_context is empty so callers can concatenate unconditionally.
+        """
+        if not past_context:
+            return ""
+        lines = ["INSTITUTIONAL KNOWLEDGE FROM PAST PROJECTS (use as reference):"]
+        for item in past_context[:max_items]:
+            kind = item.get("component_type", "pattern")
+            content = str(item.get("content", "")).strip()
+            tags = item.get("tags") or []
+            tag_str = f" [tags: {', '.join(tags)}]" if tags else ""
+            lines.append(f"  • [{kind}]{tag_str} {content}")
+        return "\n" + "\n".join(lines) + "\n\n"
+
     def reset_counters(self) -> None:
         """Reset step and tool-call counters (useful between test runs)."""
         self._step_count = 0
