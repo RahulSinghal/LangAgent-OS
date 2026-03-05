@@ -317,9 +317,9 @@ async function refreshDashboard() {
       tr.title = "Click to open project";
       const artifacts = r.artifacts || {};
 
-      const shownArtifactKeys = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document"]
+      const shownArtifactKeys = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document", "github_repo"]
         .filter((k) => artifacts[k])
-        .slice(0, 4);
+        .slice(0, 5);
 
       const artifactHtml = shownArtifactKeys.length
         ? shownArtifactKeys.map((k) => {
@@ -429,10 +429,35 @@ async function refreshContext() {
     approvalId,
   });
 
-  el("nextQuestion").textContent = nextQ || "—";
+  // QA audit flags (from QAAuditorAgent) are prefixed with [PRD QA] or [SOW QA].
+  // Display them in a separate card so they don't drown out discovery questions.
+  const qaFlags = unanswered.filter(q => /^\[(PRD|SOW) QA\]/.test(q));
+  const discoveryQs = unanswered.filter(q => !/^\[(PRD|SOW) QA\]/.test(q));
+  const nextDiscoveryQ = discoveryQs.length ? discoveryQs[discoveryQs.length - 1] : null;
+
+  el("nextQuestion").textContent = nextDiscoveryQ || "—";
   const nqCard = document.getElementById("cardNextQuestion");
   if (nqCard) {
-    nqCard.classList.toggle("card-warn", !!nextQ);
+    nqCard.classList.toggle("card-warn", !!nextDiscoveryQ);
+  }
+
+  // QA Audit flags card (only shown when flags exist)
+  const qaCard = document.getElementById("cardQaAudit");
+  const qaBody = document.getElementById("qaAuditBody");
+  if (qaCard && qaBody) {
+    if (!qaFlags.length) {
+      qaCard.classList.add("hidden");
+    } else {
+      qaCard.classList.remove("hidden");
+      qaCard.classList.toggle("card-warn", true);
+      qaBody.innerHTML = "";
+      for (const flag of qaFlags) {
+        const d = document.createElement("div");
+        d.className = "qaFlag";
+        d.textContent = flag.replace(/^\[(PRD|SOW) QA\]\s*/, "");
+        qaBody.appendChild(d);
+      }
+    }
   }
 
   // Workflow stepper (phases + substates)
@@ -504,6 +529,105 @@ async function refreshContext() {
       artifactCard?.classList.add("card-ok");
     }
   }
+
+  // Readiness checklist card
+  renderReadinessChecklist(sotWrap?.sot || {});
+
+  // GitHub publish card (only in readiness / completed phases)
+  if (artifactsProjectId) {
+    refreshGithubCard(artifactsProjectId, phase).catch(() => {});
+  }
+}
+
+function renderReadinessChecklist(sot) {
+  const card = document.getElementById("cardReadiness");
+  const body = document.getElementById("readinessBody");
+  if (!card || !body) return;
+
+  const checklist = sot.readiness_checklist || [];
+  const phase = sot.current_phase || "";
+
+  // Only show during readiness phase or when checklist exists
+  if (!checklist.length && phase !== "readiness") {
+    card.classList.add("hidden");
+    return;
+  }
+
+  card.classList.remove("hidden");
+  body.innerHTML = "";
+
+  if (!checklist.length) {
+    body.textContent = "Generating checklist…";
+    return;
+  }
+
+  const byCategory = {};
+  for (const item of checklist) {
+    const cat = item.category || "general";
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push(item);
+  }
+
+  for (const [cat, items] of Object.entries(byCategory)) {
+    const catDiv = document.createElement("div");
+    catDiv.className = "readinessCategory";
+
+    const catLabel = document.createElement("div");
+    catLabel.className = "readinessCatLabel";
+    catLabel.textContent = cat.replace(/_/g, " ").toUpperCase();
+    catDiv.appendChild(catLabel);
+
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.className = `readinessItem readiness-${item.status || "pending"}`;
+      const icon = item.status === "done" ? "✓" : item.status === "n/a" ? "—" : "○";
+      row.innerHTML = `<span class="readinessIcon">${icon}</span><span class="readinessText">${escapeHtml(item.item)}</span><span class="readinessOwner">${escapeHtml(item.owner || "")}</span>`;
+      catDiv.appendChild(row);
+    }
+    body.appendChild(catDiv);
+  }
+
+  // Summary badge
+  const done = checklist.filter(i => i.status === "done").length;
+  const total = checklist.length;
+  const cardTitle = card.querySelector(".cardTitle");
+  if (cardTitle) {
+    const existing = cardTitle.querySelector(".readinessBadge");
+    if (existing) existing.remove();
+    const badge = document.createElement("span");
+    badge.className = "readinessBadge " + (done === total ? "evalOk" : done > 0 ? "evalWarn" : "evalBad");
+    badge.textContent = `${done}/${total}`;
+    cardTitle.appendChild(badge);
+  }
+}
+
+async function refreshGithubCard(projectId, phase) {
+  const card = document.getElementById("cardGithub");
+  const linkDiv = document.getElementById("githubLink");
+  if (!card || !linkDiv) return;
+
+  // Only show in readiness or completed phases
+  if (phase !== "readiness" && phase !== "completed") {
+    card.classList.add("hidden");
+    return;
+  }
+
+  try {
+    const status = await api(`/projects/${projectId}/publish/github`, { method: "GET" });
+    if (!status.enabled) {
+      card.classList.add("hidden");
+      return;
+    }
+    card.classList.remove("hidden");
+    if (status.repo_url) {
+      linkDiv.classList.remove("hidden");
+      linkDiv.innerHTML = `<a href="${escapeHtml(status.repo_url)}" target="_blank" class="githubLink">${escapeHtml(status.repo_url)}</a>`;
+    } else {
+      linkDiv.classList.add("hidden");
+    }
+  } catch {
+    card.classList.add("hidden");
+  }
 }
 
 function renderWorkflowStepper(graph) {
@@ -552,6 +676,7 @@ const _GATE_PHASE_MAP = {
   sow_gate:          "sow",
   coding_plan_gate:  "coding",
   milestone_gate:    "milestone",
+  readiness_gate:    "readiness",
 };
 
 // Phases with their display labels and whether they have a gate
@@ -564,6 +689,7 @@ const _PHASE_CONFIG = [
   { id: "sow",         label: "SOW",       hasGate: true  },
   { id: "coding",      label: "CODING",    hasGate: true  },
   { id: "milestone",   label: "MILESTONE", hasGate: true  },
+  { id: "readiness",   label: "READINESS", hasGate: true  },
   { id: "completed",   label: "DONE",      hasGate: false },
 ];
 
@@ -1172,6 +1298,34 @@ function setup() {
   el("createModal").addEventListener("click", (ev) => {
     if (ev.target === el("createModal")) closeCreateModal();
   });
+
+  // ── GitHub publish button ──────────────────────────────────────────────────
+  const btnPublish = document.getElementById("btnPublishGithub");
+  if (btnPublish) {
+    btnPublish.addEventListener("click", async () => {
+      const { projectId } = getIds();
+      if (!projectId) { showVisibleError("Select a project first."); return; }
+      btnPublish.textContent = "Publishing…";
+      btnPublish.disabled = true;
+      try {
+        const res = await api(`/projects/${projectId}/publish/github`, { method: "POST" });
+        const linkDiv = document.getElementById("githubLink");
+        if (linkDiv && res.repo_url) {
+          linkDiv.classList.remove("hidden");
+          linkDiv.innerHTML = `<a href="${escapeHtml(res.repo_url)}" target="_blank" class="githubLink">${escapeHtml(res.repo_url)}</a>`;
+        }
+        addMessage("system", `Published ${res.files_pushed} file(s) to GitHub: ${res.repo_url}`, new Date().toISOString());
+        if (res.errors?.length) {
+          addMessage("system", `Warnings: ${res.errors.join("; ")}`, new Date().toISOString());
+        }
+      } catch (e) {
+        showVisibleError(e);
+      } finally {
+        btnPublish.textContent = "Publish to GitHub";
+        btnPublish.disabled = false;
+      }
+    });
+  }
 
   // ── Document card toggle ───────────────────────────────────────────────────
   const btnToggleDoc = document.getElementById("btnToggleDocument");

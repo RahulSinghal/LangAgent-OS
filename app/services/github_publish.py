@@ -1,0 +1,257 @@
+"""GitHub publish service.
+
+After all coding milestones are approved, this service pushes the generated
+code to a new GitHub repository using only the GitHub REST API — no local
+git installation required.
+
+Requires:
+  GITHUB_TOKEN  — fine-grained PAT with "Contents: write" scope
+  httpx         — HTTP client (already used by fetch_url tool)
+
+Flow:
+  1. create_repo()   — creates a new repo under GITHUB_DEFAULT_ORG or the
+                       authenticated user's account.
+  2. push_files()    — commits all milestone code artifacts as a single
+                       initial commit via the Git Data API.
+  3. Returns GitHubPublishResult with the html_url of the new repo.
+
+The caller (route handler) is responsible for storing the URL as an artifact.
+"""
+
+from __future__ import annotations
+
+import base64
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+_GH_API = "https://api.github.com"
+
+
+# ── Result model ──────────────────────────────────────────────────────────────
+
+@dataclass
+class GitHubPublishResult:
+    repo_url: str          # e.g. https://github.com/org/repo
+    repo_full_name: str    # e.g. org/repo
+    files_pushed: int = 0
+    already_existed: bool = False
+    errors: list[str] = field(default_factory=list)
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def publish_project(
+    project_id: int,
+    project_name: str,
+    artifact_paths: list[str],
+    extra_files: dict[str, str] | None = None,
+) -> GitHubPublishResult:
+    """Create a GitHub repo and push generated code for a project.
+
+    Args:
+        project_id:    Used to build the repo name if not overridden.
+        project_name:  Human-readable project name → slug → repo name.
+        artifact_paths: List of local file paths (generated code artifacts)
+                        to push.
+        extra_files:   Optional {filename: content} pairs to include
+                       (e.g. a generated README).
+
+    Returns:
+        GitHubPublishResult with repo URL and push statistics.
+
+    Raises:
+        RuntimeError: If GITHUB_TOKEN is not configured.
+        httpx.HTTPStatusError: On GitHub API errors.
+    """
+    from app.core.config import settings
+
+    token = settings.GITHUB_TOKEN
+    if not token:
+        raise RuntimeError(
+            "GITHUB_TOKEN is not set. Configure it in .env to enable GitHub publishing."
+        )
+
+    import httpx
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    slug = _slugify(project_name) or f"agentos-project-{project_id}"
+    org = settings.GITHUB_DEFAULT_ORG.strip()
+
+    with httpx.Client(headers=headers, timeout=30) as client:
+        # 1. Resolve owner (org or authenticated user)
+        owner = org if org else _get_authenticated_user(client)
+
+        # 2. Create repository (idempotent — tolerates 422 already-exists)
+        repo_data, already_existed = _create_repo(client, owner, slug, project_name)
+        html_url = repo_data["html_url"]
+        full_name = repo_data["full_name"]
+        default_branch = repo_data.get("default_branch", "main")
+
+        result = GitHubPublishResult(
+            repo_url=html_url,
+            repo_full_name=full_name,
+            already_existed=already_existed,
+        )
+
+        # 3. Collect files to push
+        files: dict[str, str] = {}
+
+        for path_str in (artifact_paths or []):
+            p = Path(path_str)
+            if p.exists() and p.is_file():
+                try:
+                    files[p.name] = p.read_text(encoding="utf-8", errors="replace")
+                except Exception as exc:
+                    result.errors.append(f"Could not read {p}: {exc}")
+
+        if extra_files:
+            files.update(extra_files)
+
+        if not files:
+            result.errors.append("No files to push.")
+            return result
+
+        # 4. Push all files as a single commit
+        pushed = _push_files(client, owner, slug, default_branch, files)
+        result.files_pushed = pushed
+
+    logger.info(
+        "github.published",
+        repo=full_name,
+        files=pushed,
+        already_existed=already_existed,
+    )
+    return result
+
+
+# ── Private helpers ───────────────────────────────────────────────────────────
+
+def _get_authenticated_user(client) -> str:
+    resp = client.get(f"{_GH_API}/user")
+    resp.raise_for_status()
+    return resp.json()["login"]
+
+
+def _create_repo(client, owner: str, name: str, description: str) -> tuple[dict, bool]:
+    """Create repo under org or user. Returns (repo_data, already_existed)."""
+    # Try org first, fall back to user endpoint
+    from app.core.config import settings
+    is_org = bool(settings.GITHUB_DEFAULT_ORG.strip())
+
+    payload: dict[str, Any] = {
+        "name": name,
+        "description": f"Generated by AgentOS — {description}",
+        "private": True,
+        "auto_init": False,
+    }
+
+    url = f"{_GH_API}/orgs/{owner}/repos" if is_org else f"{_GH_API}/user/repos"
+    resp = client.post(url, json=payload)
+
+    if resp.status_code == 422:
+        # Repo already exists — fetch it
+        fetch = client.get(f"{_GH_API}/repos/{owner}/{name}")
+        fetch.raise_for_status()
+        return fetch.json(), True
+
+    resp.raise_for_status()
+    return resp.json(), False
+
+
+def _push_files(
+    client,
+    owner: str,
+    repo: str,
+    branch: str,
+    files: dict[str, str],
+) -> int:
+    """Push files via the Git Data API (tree + commit + ref update).
+
+    This avoids needing a local git installation.  For a new empty repo
+    we create the initial commit directly.  For an existing repo we create
+    a new commit on top of the current HEAD.
+    """
+    base_url = f"{_GH_API}/repos/{owner}/{repo}"
+
+    # Get current HEAD (may not exist for brand-new repos)
+    parent_sha: str | None = None
+    base_tree_sha: str | None = None
+    try:
+        ref_resp = client.get(f"{base_url}/git/refs/heads/{branch}")
+        if ref_resp.status_code == 200:
+            parent_sha = ref_resp.json()["object"]["sha"]
+            # Get the tree SHA of that commit
+            commit_resp = client.get(f"{base_url}/git/commits/{parent_sha}")
+            commit_resp.raise_for_status()
+            base_tree_sha = commit_resp.json()["tree"]["sha"]
+    except Exception:
+        pass  # New repo — no parent
+
+    # Build tree blobs
+    tree_items = []
+    for filename, content in files.items():
+        blob_resp = client.post(
+            f"{base_url}/git/blobs",
+            json={
+                "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                "encoding": "base64",
+            },
+        )
+        blob_resp.raise_for_status()
+        tree_items.append({
+            "path": filename,
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob_resp.json()["sha"],
+        })
+
+    # Create tree
+    tree_payload: dict[str, Any] = {"tree": tree_items}
+    if base_tree_sha:
+        tree_payload["base_tree"] = base_tree_sha
+    tree_resp = client.post(f"{base_url}/git/trees", json=tree_payload)
+    tree_resp.raise_for_status()
+    new_tree_sha = tree_resp.json()["sha"]
+
+    # Create commit
+    commit_payload: dict[str, Any] = {
+        "message": "feat: add AgentOS generated code",
+        "tree": new_tree_sha,
+    }
+    if parent_sha:
+        commit_payload["parents"] = [parent_sha]
+    commit_resp = client.post(f"{base_url}/git/commits", json=commit_payload)
+    commit_resp.raise_for_status()
+    new_commit_sha = commit_resp.json()["sha"]
+
+    # Update (or create) the branch ref
+    ref_url = f"{base_url}/git/refs/heads/{branch}"
+    ref_check = client.get(ref_url)
+    if ref_check.status_code == 200:
+        client.patch(ref_url, json={"sha": new_commit_sha, "force": False}).raise_for_status()
+    else:
+        client.post(
+            f"{base_url}/git/refs",
+            json={"ref": f"refs/heads/{branch}", "sha": new_commit_sha},
+        ).raise_for_status()
+
+    return len(files)
+
+
+def _slugify(name: str) -> str:
+    """Convert a project name to a valid GitHub repo slug."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9\-_]", "-", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:100]

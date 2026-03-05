@@ -70,6 +70,19 @@ class Settings(BaseSettings):
     # 0.0 = warn only (default). 80.0 = block if < 80% covered.
     MIN_EVAL_COVERAGE_PCT: float = 0.0
 
+    # ── GitHub integration ────────────────────────────────────────
+    # Set GITHUB_TOKEN (fine-grained PAT with Contents write scope) to enable
+    # "Publish to GitHub" after milestones are approved.  Leave empty to disable.
+    GITHUB_TOKEN: str = ""
+    # Default org/user under which new repos are created.
+    # If empty, falls back to the authenticated user's own account.
+    GITHUB_DEFAULT_ORG: str = ""
+
+    # ── Supervisor planning mode ──────────────────────────────────
+    # "deterministic" — static _PHASE_PLAN lookup (default, zero LLM cost)
+    # "llm"           — LLM generates TaskDAG; falls back to deterministic on error
+    SUPERVISOR_MODE: str = "deterministic"
+
     # ── Testing / Deterministic mode ──────────────────────────────
     USE_MOCK_AGENTS: bool = False
 

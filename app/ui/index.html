@@ -140,6 +140,18 @@
             </div>
           </section>
 
+          <!-- QA Audit flags (shown only when QAAuditorAgent raised issues) -->
+          <section class="card hidden" id="cardQaAudit">
+            <div class="cardTitle">⚠ QA Audit Flags</div>
+            <div id="qaAuditBody" class="cardBody"></div>
+          </section>
+
+          <!-- Readiness checklist (shown during readiness phase) -->
+          <section class="card hidden" id="cardReadiness">
+            <div class="cardTitle">Deployment Readiness</div>
+            <div id="readinessBody" class="cardBody subtle">—</div>
+          </section>
+
           <!-- Artifacts -->
           <section class="card" id="cardArtifacts">
             <div class="cardTitle">Artifacts</div>
@@ -158,6 +170,15 @@
               </div>
             </div>
             <div id="evalCoverageBody" class="cardBody evalBody subtle">—</div>
+          </section>
+
+          <!-- GitHub publish (shown when phase is readiness/completed and token configured) -->
+          <section class="card hidden" id="cardGithub">
+            <div class="cardTitle">GitHub</div>
+            <div class="cardBody" id="githubBody">
+              <button id="btnPublishGithub" class="btn primary githubBtn">Publish to GitHub</button>
+              <div id="githubLink" class="hidden" style="margin-top:8px;font-size:12px"></div>
+            </div>
           </section>
 
           <!-- Document upload (collapsible) -->

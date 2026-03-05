@@ -116,6 +116,10 @@ def create_app() -> FastAPI:
     # Cross-project memory
     app.include_router(memory_router, prefix=settings.API_PREFIX)
 
+    # GitHub publish integration
+    from app.api.routes_github import router as github_router
+    app.include_router(github_router, prefix=settings.API_PREFIX)
+
     return app
 
 
