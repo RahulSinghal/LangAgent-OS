@@ -13,7 +13,7 @@ from __future__ import annotations
 import structlog
 
 from app.sot.patch import apply_patch
-from app.sot.state import ProjectState
+from app.sot.state import ProjectState, detect_project_type
 
 logger = structlog.get_logger(__name__)
 
@@ -69,12 +69,18 @@ def intake_normalize(state: dict) -> dict:
     except Exception:
         logger.exception("memory.inject_failed", project_id=sot.project_id)
 
+    # Detect project type from the initial message (heuristic — overridable later)
+    project_type = sot.project_type
+    if project_type == "generic" and msg:
+        project_type = detect_project_type(msg)
+
     updated = apply_patch(
         sot,
         {
             "current_phase": "discovery",
             "hosting_preference": hp,
             "past_context": past_context,
+            "project_type": project_type,
         },
     )
 

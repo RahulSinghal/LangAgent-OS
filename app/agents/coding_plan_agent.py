@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from app.agents.base import BaseAgent
 from app.registry.loader import AgentLimits, AgentSpec
-from app.sot.state import ApprovalStatus, MilestoneItem, ProjectState
+from app.sot.state import ApprovalStatus, MilestoneItem, ProjectState, _DEFAULT_EVALS
 
 
 def _make_default_spec() -> AgentSpec:
@@ -77,16 +77,24 @@ class CodingPlanAgent(BaseAgent):
     ) -> list[MilestoneItem]:
         """LLM: divide the backlog into ordered, independently-deliverable milestones."""
         past_ctx = self._past_context_block(state.past_context)
+        project_type = state.project_type or "generic"
+        type_hint = self._project_type_ordering_hint(project_type)
+        tech_ctx = self._tech_stack_hint(state)
+        eval_defaults = _DEFAULT_EVALS.get(project_type, _DEFAULT_EVALS["generic"])
+
         system = (
             "You are a senior tech lead planning a software delivery. "
             "Divide the approved work into logical, sequential coding milestones.\n\n"
+            f"Project type: {project_type}\n"
+            + type_hint
+            + tech_ctx
             + past_ctx
             + "Return a JSON array. Each item:\n"
             '{"name": "...", "description": "...", "stories": ["story ref 1", ...]}\n\n'
             "Guidelines:\n"
             "- 3–6 milestones total.\n"
             "- Each milestone must be independently deliverable and reviewable.\n"
-            "- Order: foundational (infra/data/auth) → core features → integrations → polish.\n"
+            "- Follow the project-type ordering above.\n"
             "- stories lists the specific backlog items covered by that milestone."
             + feedback_ctx
         )
@@ -104,9 +112,58 @@ class CodingPlanAgent(BaseAgent):
                     name=m.get("name", f"Milestone {i + 1}"),
                     description=m.get("description", ""),
                     stories=m.get("stories", []),
+                    expected_evals=eval_defaults,
                 )
                 for i, m in enumerate(items)
                 if isinstance(m, dict)
             ]
         except Exception:
             return []
+
+    @staticmethod
+    def _project_type_ordering_hint(project_type: str) -> str:
+        hints = {
+            "rag_pipeline": (
+                "Ordering for RAG pipeline:\n"
+                "1. Data ingestion + chunking pipeline\n"
+                "2. Embedding pipeline + vector store setup\n"
+                "3. Retrieval chain + LLM orchestration\n"
+                "4. API gateway + eval harness\n\n"
+            ),
+            "web_app": (
+                "Ordering for web application:\n"
+                "1. Database models + migrations + auth backend\n"
+                "2. Core API routes + business logic\n"
+                "3. Frontend components + pages\n"
+                "4. Integrations + deployment config\n\n"
+            ),
+            "crm": (
+                "Ordering for CRM:\n"
+                "1. Org hierarchy + user/role models + permissions\n"
+                "2. Lead/contact/pipeline management\n"
+                "3. Activity log + workflow triggers\n"
+                "4. Reporting + integrations\n\n"
+            ),
+            "voice_chatbot": (
+                "Ordering for voice chatbot:\n"
+                "1. Telephony webhook + session management\n"
+                "2. NLU intent classification + dialogue state machine\n"
+                "3. TTS integration + response generation\n"
+                "4. Analytics + fallback handling + human escalation\n\n"
+            ),
+            "generic": (
+                "Ordering: foundational (infra/data/auth) → core features → "
+                "integrations → polish.\n\n"
+            ),
+        }
+        return hints.get(project_type, hints["generic"])
+
+    @staticmethod
+    def _tech_stack_hint(state: ProjectState) -> str:
+        ts = state.tech_stack
+        if not ts:
+            return ""
+        parts = [f"{k}={v}" for k, v in ts.model_dump().items() if v]
+        if not parts:
+            return ""
+        return "Tech stack: " + ", ".join(parts) + "\n\n"

@@ -173,15 +173,19 @@ agents:
     description: >
       Divides the approved SOW backlog into sequential, independently-reviewable
       coding milestones and raises a tech-lead approval gate before any code is
-      written. Supports rejection-feedback re-planning loop.
+      written. Project-type aware milestone ordering. Supports rejection-feedback
+      re-planning loop.
     capabilities:
       - milestone_planning
       - backlog_decomposition
+      - project_type_routing
       - rejection_feedback_loop
     required_inputs:
       - scope
       - requirements
       - gathered_requirements
+      - project_type
+      - tech_stack
     output_schema: CodingPlanPatch
     prompt_template_path: prompts/coding_plan.j2
     allowed_tools: []
@@ -190,22 +194,53 @@ agents:
       max_tool_calls: 0
       budget_usd: 1.00
 
+  - name: ArchitectureAgent
+    role: architect
+    description: >
+      Generates the ArchitectureSpec (file tree, API contracts, DB schema,
+      milestone-to-file mapping) before any code is written. Runs after
+      coding_plan approval. Project-type aware: RAG, web_app, CRM, voice_chatbot.
+    capabilities:
+      - architecture_design
+      - file_tree_generation
+      - api_contract_generation
+      - project_type_routing
+    required_inputs:
+      - scope
+      - requirements
+      - coding_plan
+      - project_type
+      - tech_stack
+    output_schema: ArchitectureSpecPatch
+    prompt_template_path: prompts/architecture.j2
+    allowed_tools: []
+    limits:
+      max_steps: 5
+      max_tool_calls: 0
+      budget_usd: 1.50
+
   - name: MilestoneCodeAgent
     role: engineer
     description: >
       Generates production-quality code for one coding milestone at a time.
-      Writes files to disk via write_file tool. Raises a per-milestone tech-lead
-      approval gate. Supports rejection-feedback re-generation for the current
-      milestone without resetting other milestones.
+      Writes files to disk via write_file tool. Uses TechStackSpec and
+      ArchitectureSpec.milestone_file_map for targeted code generation.
+      Raises a per-milestone tech-lead approval gate. Supports rejection-feedback
+      re-generation for the current milestone without resetting other milestones.
     capabilities:
       - code_generation
       - file_writing
+      - tech_stack_aware
+      - architecture_aware
       - rejection_feedback_loop
     required_inputs:
       - coding_plan
       - current_milestone_index
       - scope
       - requirements
+      - tech_stack
+      - architecture_spec
+      - project_type
     output_schema: MilestoneCodePatch
     prompt_template_path: prompts/milestone_code.j2
     allowed_tools:
@@ -216,8 +251,58 @@ agents:
       max_tool_calls: 20
       budget_usd: 3.00
 
-# ── Phase 2 stubs (future) ────────────────────────────────────────
+  - name: CodeReviewAgent
+    role: security_reviewer
+    description: >
+      Automated security and code quality gate that runs after each
+      MilestoneCodeAgent and before the human tech-lead approval gate.
+      Reviews for OWASP Top 10, code quality, architecture compliance, and
+      project-type specific issues (RAG accuracy, voice latency, CRM permissions).
+      Severity: pass | warn | block. Block resets milestone to pending.
+    capabilities:
+      - security_review
+      - code_quality_review
+      - architecture_compliance
+      - project_type_routing
+    required_inputs:
+      - coding_plan
+      - current_milestone_index
+      - project_type
+    output_schema: CodeReviewPatch
+    prompt_template_path: prompts/code_review.j2
+    allowed_tools:
+      - read_file
+    limits:
+      max_steps: 5
+      max_tool_calls: 10
+      budget_usd: 1.00
+
+  - name: ScaffoldAgent
+    role: devops
+    description: >
+      Generates project scaffolding files after all milestones are approved:
+      Dockerfile (multi-stage), docker-compose.yml, .env.example, .gitignore,
+      GitHub Actions CI/CD workflow, README.md, requirements.txt / package.json.
+      Project-type aware: includes vector store for RAG, telephony mock for voice.
+    capabilities:
+      - dockerfile_generation
+      - cicd_generation
+      - env_config_generation
+      - project_type_routing
+    required_inputs:
+      - scope
+      - requirements
+      - tech_stack
+      - project_type
+    output_schema: ScaffoldPatch
+    prompt_template_path: prompts/scaffold.j2
+    allowed_tools:
+      - write_file
+    limits:
+      max_steps: 5
+      max_tool_calls: 15
+      budget_usd: 1.00
+
+# ── Future stubs ──────────────────────────────────────────────────
 #  - name: QAAuditorAgent
-#  - name: ArchitectAgent
 #  - name: BacklogAgent
-#  - name: DevOpsAgent

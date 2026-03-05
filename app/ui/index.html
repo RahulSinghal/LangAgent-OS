@@ -80,6 +80,8 @@
                 <span class="mono" id="nodeLabel">node: —</span>
                 <span class="metaSep">·</span>
                 <span class="mono" id="approvalLabel">approval: —</span>
+                <span class="metaSep">·</span>
+                <span class="mono" id="projectTypeLabel">type: —</span>
               </div>
               <div class="metaRow">
                 <div id="workflowStepper" class="stepper" aria-label="Workflow progress"></div>
@@ -144,6 +146,18 @@
           <section class="card hidden" id="cardQaAudit">
             <div class="cardTitle">⚠ QA Audit Flags</div>
             <div id="qaAuditBody" class="cardBody"></div>
+          </section>
+
+          <!-- Code review findings (shown during milestone phase) -->
+          <section class="card hidden" id="cardCodeReview">
+            <div class="cardTitle">Code Review</div>
+            <div id="codeReviewBody" class="cardBody subtle">—</div>
+          </section>
+
+          <!-- Architecture spec (shown after ArchitectureAgent runs) -->
+          <section class="card hidden" id="cardArchitecture">
+            <div class="cardTitle">Architecture</div>
+            <div id="architectureBody" class="cardBody subtle">—</div>
           </section>
 
           <!-- Readiness checklist (shown during readiness phase) -->

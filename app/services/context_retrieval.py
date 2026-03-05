@@ -420,6 +420,59 @@ def auto_extract_and_store(
             "source": "auto",
         })
 
+    # Tech stack decision (Gap 8)
+    tech_stack = sot.get("tech_stack")
+    if tech_stack and isinstance(tech_stack, dict):
+        project_type = sot.get("project_type", "generic")
+        ts_parts = [f"{k}: {v}" for k, v in tech_stack.items() if v]
+        if ts_parts:
+            ts_content = f"project_type={project_type}; " + "; ".join(ts_parts)
+            tags = [domain, project_type, "tech_stack"] + _extract_tags(ts_content)
+            components.append({
+                "source_project_id": project_id,
+                "component_type": "tech_stack_decision",
+                "category": project_type,
+                "name": f"Tech stack for {domain} ({project_type})",
+                "content": ts_content,
+                "tags": list(dict.fromkeys(tags)),
+                "source": "auto",
+            })
+
+    # Architecture spec (API contracts + DB schema as code components) (Gap 8)
+    arch_spec = sot.get("architecture_spec")
+    if arch_spec and isinstance(arch_spec, dict):
+        project_type = sot.get("project_type", "generic")
+
+        # API contracts
+        for contract in arch_spec.get("api_contracts", []):
+            endpoint = f"{contract.get('method', 'GET')} {contract.get('path', '/')}"
+            content = str(contract)
+            tags = [domain, project_type, "api"] + _extract_tags(content)
+            components.append({
+                "source_project_id": project_id,
+                "component_type": "api_contract",
+                "category": project_type,
+                "name": endpoint[:120],
+                "content": content[:500],
+                "tags": list(dict.fromkeys(tags)),
+                "source": "auto",
+            })
+
+        # Database schema
+        for table in arch_spec.get("database_schema", []):
+            table_name = table.get("table", "unknown")
+            content = str(table)
+            tags = [domain, project_type, "database", table_name] + _extract_tags(content)
+            components.append({
+                "source_project_id": project_id,
+                "component_type": "database_schema",
+                "category": project_type,
+                "name": f"Schema: {table_name}",
+                "content": content[:500],
+                "tags": list(dict.fromkeys(tags)),
+                "source": "auto",
+            })
+
     if not components:
         return []
 
@@ -443,6 +496,13 @@ def build_context_summary(components: list[dict[str, Any]]) -> str:
         "assumption": "Common assumptions",
         "sow_template": "SOW templates",
         "prd_section": "PRD sections",
+        # Code-specific component types (Gap 8)
+        "code_template": "Code templates",
+        "tech_stack_decision": "Tech stack decisions",
+        "api_contract": "API contracts",
+        "test_pattern": "Test patterns",
+        "deployment_pattern": "Deployment patterns",
+        "database_schema": "Database schemas",
     }
 
     for ctype, items in by_type.items():

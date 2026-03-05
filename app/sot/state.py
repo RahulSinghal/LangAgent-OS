@@ -145,7 +145,78 @@ class DeepWorkOutput(BaseModel):
     references: list[str] = Field(default_factory=list)
 
 
+# ── Project-type and tech-stack models ────────────────────────────────────────
+
+class TechStackSpec(BaseModel):
+    """Typed tech-stack selections — populated by discovery or TechStackAgent."""
+    language: str | None = None               # "python" | "typescript" | "go" | ...
+    backend_framework: str | None = None      # "fastapi" | "django" | "express" | ...
+    frontend_framework: str | None = None     # "react" | "vue" | "next" | None
+    database: str | None = None               # "postgresql" | "mysql" | "mongodb" | ...
+    vector_store: str | None = None           # RAG: "pgvector" | "pinecone" | "chroma"
+    llm_provider: str | None = None           # RAG/voice: "openai" | "anthropic" | "azure"
+    embedding_model: str | None = None        # RAG: "text-embedding-3-small" | ...
+    auth_method: str | None = None            # "jwt" | "oauth2" | "session" | "api_key"
+    telephony: str | None = None              # voice: "twilio" | "vonage" | None
+    tts_provider: str | None = None           # voice: "elevenlabs" | "azure" | "google"
+    nlu_provider: str | None = None           # voice: "dialogflow" | "rasa" | "custom"
+    test_framework: str | None = None         # "pytest" | "jest" | "vitest" | ...
+    package_manager: str | None = None        # "pip" | "poetry" | "npm" | "pnpm"
+
+
+class CodeFile(BaseModel):
+    """A single generated source file within a milestone."""
+    path: str           # relative path: "src/rag/retriever.py"
+    language: str       # "python" | "typescript" | "yaml" | ...
+    content: str        # full file content
+    description: str = ""
+
+
+class ArchitectureSpec(BaseModel):
+    """Architecture blueprint generated before code — file tree + contracts."""
+    style: str = "layered"                             # "layered" | "microservices" | "monorepo" | ...
+    file_tree: list[str] = Field(default_factory=list) # relative paths of ALL project files
+    api_contracts: list[dict] = Field(default_factory=list)    # OpenAPI-style endpoint defs
+    database_schema: list[dict] = Field(default_factory=list)  # table/collection defs
+    milestone_file_map: dict[str, list[str]] = Field(default_factory=dict)
+    # Maps milestone_id → list[relative_file_path] for targeted code gen
+
+
 # ── Step 4: Milestone-based code generation models ────────────────────────────
+
+# Default eval sets per project type
+_DEFAULT_EVALS: dict[str, list[str]] = {
+    "rag_pipeline": [
+        "unit: retrieval accuracy",
+        "unit: embedding pipeline",
+        "integration: vector store",
+        "e2e: query → answer",
+    ],
+    "web_app": [
+        "unit: component rendering",
+        "integration: API endpoints",
+        "e2e: user flows",
+        "security: auth headers",
+    ],
+    "crm": [
+        "unit: business logic",
+        "integration: org hierarchy",
+        "e2e: CRUD workflows",
+        "security: role permissions",
+    ],
+    "voice_chatbot": [
+        "unit: NLU intent detection",
+        "integration: telephony webhook",
+        "e2e: dialogue flow",
+        "unit: TTS output quality",
+    ],
+    "generic": [
+        "unit: core logic",
+        "integration: API",
+        "e2e: main flow",
+    ],
+}
+
 
 class MilestoneItem(BaseModel):
     """A single coding milestone within the tech-lead-approved plan."""
@@ -154,8 +225,10 @@ class MilestoneItem(BaseModel):
     description: str                                      # what this milestone covers
     stories: list[str] = Field(default_factory=list)      # backlog story refs in scope
     status: str = "pending"                               # pending|in_progress|approved|rejected
-    code_artifact_path: str | None = None                 # path written by MilestoneCodeAgent
+    code_artifact_path: str | None = None                 # base path written by MilestoneCodeAgent
+    code_files: list[CodeFile] = Field(default_factory=list)  # structured file manifest
     expected_evals: list[str] = Field(default_factory=list)
+    review_feedback: str | None = None                    # CodeReviewAgent findings
     # e.g. ["unit: auth service", "e2e: login flow", "integration: DB session"]
 
 
@@ -229,6 +302,13 @@ class ProjectState(BaseModel):
     document_type: str | None = None        # "brd" | "prd" | "sow" | "unknown"
     domain: str = "generic"                 # domain for LLM prompt specialisation
 
+    # ── Project type and architecture ─────────────────────────────────────────
+    # project_type drives agent routing, milestone ordering, and eval defaults.
+    # Values: "generic" | "rag_pipeline" | "web_app" | "crm" | "voice_chatbot"
+    project_type: str = "generic"
+    tech_stack: TechStackSpec | None = None
+    architecture_spec: ArchitectureSpec | None = None
+
     # ── Phase 4: Coverage-score driven discovery ───────────────────────────────
     coverage_scores: dict[str, float] = Field(default_factory=lambda: {
         "business_context": 0.0,
@@ -269,6 +349,23 @@ class ProjectState(BaseModel):
     def model_dump_jsonb(self) -> dict[str, Any]:
         """Serialize to a JSONB-safe dict (all values JSON-serialisable)."""
         return self.model_dump(mode="json")
+
+
+def detect_project_type(text: str) -> str:
+    """Heuristic: infer project_type from the user's initial message.
+
+    Returns one of: "rag_pipeline" | "web_app" | "crm" | "voice_chatbot" | "generic".
+    """
+    t = text.lower()
+    if any(k in t for k in ("rag", "retrieval", "vector", "embedding", "knowledge base", "semantic search")):
+        return "rag_pipeline"
+    if any(k in t for k in ("voice", "chatbot", "ivr", "telephony", "twilio", "call centre", "call center", "speech")):
+        return "voice_chatbot"
+    if any(k in t for k in ("crm", "customer relationship", "lead management", "sales pipeline", "org hierarchy")):
+        return "crm"
+    if any(k in t for k in ("website", "web app", "web application", "landing page", "frontend", "react", "next.js", "nuxt")):
+        return "web_app"
+    return "generic"
 
 
 def create_initial_state(

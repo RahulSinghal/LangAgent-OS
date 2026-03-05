@@ -42,6 +42,52 @@ _COVERAGE_CATEGORIES: list[str] = [
     "timeline_and_budget",
 ]
 
+# ── Project-type-specific question templates ──────────────────────────────────
+# These supplement the generic coverage questions when a project_type is known.
+
+_PROJECT_TYPE_QUESTIONS: dict[str, list[str]] = {
+    "rag_pipeline": [
+        "What are the primary document sources for your knowledge base? (PDFs, websites, databases, APIs?)",
+        "What embedding model and vector store are you planning to use? (e.g. OpenAI + pgvector, Cohere + Pinecone)",
+        "What retrieval strategy do you need? (semantic search, hybrid BM25+semantic, multi-hop?)",
+        "How frequently does the knowledge base need to be updated? (real-time, daily batch, manual?)",
+        "What is the expected query volume and latency SLA? (e.g. <2s P95 for 1000 concurrent users)",
+        "Do you need citation/source attribution in answers? How should conflicting sources be handled?",
+        "What is your chunking strategy preference? (fixed-size, paragraph, semantic units?)",
+        "Do you need evaluation of retrieval quality? (RAGAS, custom evals?)",
+    ],
+    "web_app": [
+        "Is this server-side rendered (Next.js/Nuxt), client-side SPA, or static site? What SEO requirements exist?",
+        "What authentication method is required? (JWT, OAuth2/social login, SSO, magic links?)",
+        "What component library or design system will you use? (shadcn/ui, Material UI, Tailwind, custom?)",
+        "Do you need a CMS or headless content management? (Contentful, Sanity, or database-driven?)",
+        "What are the real-time requirements, if any? (WebSocket, SSE, polling?)",
+        "What are the mobile/responsive requirements? Pure web, PWA, or also native app?",
+        "What browser support matrix do you need? (modern only, IE11, Safari 14+?)",
+        "What are your Core Web Vitals / performance budget targets?",
+    ],
+    "crm": [
+        "What is your org hierarchy model? (company → department → team → user, or flat?)",
+        "What role and permission model do you need? (RBAC, ABAC, custom per-entity?)",
+        "What pipeline stages and statuses do your sales/support workflows follow?",
+        "What integrations are required? (email/calendar sync, marketing automation, ERP?)",
+        "Do you need workflow automation triggers? (e.g. auto-assign lead on status change)",
+        "What reporting and analytics dashboards are required out of the box?",
+        "Do you need multi-tenancy (separate data per client organisation)?",
+        "What data retention and GDPR/compliance requirements apply to contact data?",
+    ],
+    "voice_chatbot": [
+        "What telephony provider will you use? (Twilio, Vonage, AWS Connect, on-premise PBX?)",
+        "What TTS (text-to-speech) provider and voice are required? (ElevenLabs, Azure, Google, Amazon Polly?)",
+        "What NLU/intent recognition approach? (Dialogflow CX, Rasa, fine-tuned LLM, rule-based?)",
+        "What languages and dialects must the bot support?",
+        "What is the expected concurrent call volume and average call duration?",
+        "Do you need human escalation / agent handoff? What CRM/ticketing system does the agent use?",
+        "What dialogue flows / conversation scripts exist? (IVR menu, free-form NLU, or hybrid?)",
+        "What analytics and call recording requirements do you have? (compliance, GDPR, storage?)",
+    ],
+}
+
 _NFR_RE = re.compile(
     r"\b(performance|security|availability|scalability|reliability|"
     r"uptime|latency|throughput|compliance|audit|backup)\b",
@@ -108,6 +154,17 @@ class DiscoveryAgent(BaseAgent):
 
         # ── Step 3: Formulate next question ───────────────────────────────────
         remaining = list(patch.get("followup_questions", state.followup_questions))
+
+        # Seed project-type-specific questions if not yet asked and followup queue is empty.
+        # We seed them into the followup_questions list once (detected by absence of the
+        # sentinel tag "__pt_seeded__" in the already-asked open_questions).
+        if not remaining and state.project_type and state.project_type != "generic":
+            type_qs = _PROJECT_TYPE_QUESTIONS.get(state.project_type, [])
+            already_asked = {q.question for q in state.open_questions}
+            unseeded = [q for q in type_qs if q not in already_asked]
+            if unseeded:
+                remaining = unseeded
+                patch["followup_questions"] = remaining[1:]  # rest go into queue
 
         if remaining:
             # Consume the first gap question
@@ -214,10 +271,16 @@ class DiscoveryAgent(BaseAgent):
         )
         weakest_score = scores.get(weakest, 0.0)
 
+        project_type = getattr(state, "project_type", "generic") or "generic"
+        type_hint = ""
+        if project_type != "generic":
+            type_hint = f"Project type: {project_type}. Tailor your question to this context.\n\n"
+
         system = (
             f"You are a senior business analyst conducting a discovery session.\n"
-            f"Domain: {state.domain}\n\n"
-            f"Coverage scores (0.0=nothing known, 1.0=fully covered):\n{scores}\n\n"
+            f"Domain: {state.domain}\n"
+            + type_hint
+            + f"Coverage scores (0.0=nothing known, 1.0=fully covered):\n{scores}\n\n"
             f"The weakest category is: {weakest} (score: {weakest_score})\n\n"
             f"Known so far:\n{state.gathered_requirements or 'Nothing yet.'}\n\n"
             "Rules:\n"

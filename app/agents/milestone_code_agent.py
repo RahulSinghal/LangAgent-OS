@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from app.agents.base import BaseAgent
 from app.registry.loader import AgentLimits, AgentSpec
-from app.sot.state import ApprovalStatus, MilestoneItem, ProjectState
+from app.sot.state import ApprovalStatus, ArchitectureSpec, CodeFile, MilestoneItem, ProjectState, TechStackSpec
 
 
 def _make_default_spec() -> AgentSpec:
@@ -61,6 +61,17 @@ class MilestoneCodeAgent(BaseAgent):
         updated_plan[idx]["status"] = "in_progress"
         if artifact_path:
             updated_plan[idx]["code_artifact_path"] = artifact_path
+        # Store structured file manifest
+        if code_files:
+            updated_plan[idx]["code_files"] = [
+                CodeFile(
+                    path=f["path"],
+                    language=f.get("language", self._infer_language(f["path"])),
+                    content=f["content"],
+                    description=f.get("description", ""),
+                ).model_dump()
+                for f in code_files
+            ]
 
         approval_key = f"milestone_{milestone.id}"
         approvals = {k: v.value for k, v in state.approvals_status.items()}
@@ -92,12 +103,21 @@ class MilestoneCodeAgent(BaseAgent):
         feedback_ctx: str,
     ) -> list[dict]:
         """LLM: generate code files for this milestone."""
+        tech_ctx = self._tech_stack_context(state.tech_stack)
+        arch_ctx = self._architecture_context(state.architecture_spec, milestone)
+        project_type = state.project_type or "generic"
+
         system = (
-            "You are a senior software engineer implementing a milestone. "
-            "Return a JSON array of files to create. Each item:\n"
-            '{"path": "relative/path/to/file.py", "content": "..."}\n\n'
+            "You are a senior software engineer implementing a milestone.\n\n"
+            f"Project type: {project_type}\n"
+            + tech_ctx
+            + arch_ctx
+            + "Return a JSON array of files to create. Each item:\n"
+            '{"path": "relative/path/to/file.py", "language": "python", '
+            '"content": "...", "description": "one-line description"}\n\n'
             "Write clean, production-quality code with docstrings. "
-            "Respect the project architecture and listed requirements."
+            "Follow the file structure defined in the architecture spec above. "
+            "Only create files assigned to THIS milestone."
             + feedback_ctx
         )
         context = (
@@ -117,6 +137,45 @@ class MilestoneCodeAgent(BaseAgent):
             ]
         except Exception:
             return []
+
+    @staticmethod
+    def _tech_stack_context(tech_stack: TechStackSpec | None) -> str:
+        if not tech_stack:
+            return ""
+        parts = [f"  {k}: {v}" for k, v in tech_stack.model_dump().items() if v]
+        if not parts:
+            return ""
+        return "Tech stack:\n" + "\n".join(parts) + "\n\n"
+
+    @staticmethod
+    def _architecture_context(
+        arch_spec: ArchitectureSpec | None,
+        milestone: MilestoneItem,
+    ) -> str:
+        if not arch_spec:
+            return ""
+        lines = [f"Architecture style: {arch_spec.style}"]
+        files_for_milestone = arch_spec.milestone_file_map.get(milestone.name, [])
+        if files_for_milestone:
+            lines.append(f"Files for THIS milestone: {files_for_milestone}")
+        else:
+            lines.append(f"Full file tree (pick relevant files): {arch_spec.file_tree[:20]}")
+        return "\n".join(lines) + "\n\n"
+
+    @staticmethod
+    def _infer_language(path: str) -> str:
+        ext_map = {
+            ".py": "python", ".ts": "typescript", ".tsx": "typescript",
+            ".js": "javascript", ".jsx": "javascript", ".go": "go",
+            ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+            ".md": "markdown", ".sh": "bash", ".dockerfile": "dockerfile",
+        }
+        for ext, lang in ext_map.items():
+            if path.endswith(ext):
+                return lang
+        if "Dockerfile" in path:
+            return "dockerfile"
+        return "text"
 
     def _write_files(
         self,

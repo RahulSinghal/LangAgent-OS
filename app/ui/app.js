@@ -162,7 +162,7 @@ async function refreshModeBadge() {
   }
 }
 
-function setMeta({ runId, status, node, phase, approvalId }) {
+function setMeta({ runId, status, node, phase, approvalId, projectType }) {
   const s = getState();
   const projectName = s.projectName || "—";
   el("projectLabel").textContent = projectName;
@@ -173,6 +173,7 @@ function setMeta({ runId, status, node, phase, approvalId }) {
   el("nodeLabel").textContent  = `node: ${node ?? "—"}`;
   el("phaseLabel").textContent = `phase: ${phase ?? "—"}`;
   el("approvalLabel").textContent = `approval: ${approvalId ?? "—"}`;
+  el("projectTypeLabel").textContent = `type: ${projectType ?? "—"}`;
 }
 
 function getState() {
@@ -421,12 +422,16 @@ async function refreshContext() {
   const unanswered = (sotWrap?.unanswered_questions || []);
   const nextQ = unanswered.length ? unanswered[unanswered.length - 1] : null;
 
+  const sot = sotWrap?.sot || {};
+  const projectType = sot.project_type ?? null;
+
   setMeta({
     runId,
     status: run?.status,
     node: run?.current_node,
     phase,
     approvalId,
+    projectType,
   });
 
   // QA audit flags (from QAAuditorAgent) are prefixed with [PRD QA] or [SOW QA].
@@ -531,7 +536,13 @@ async function refreshContext() {
   }
 
   // Readiness checklist card
-  renderReadinessChecklist(sotWrap?.sot || {});
+  renderReadinessChecklist(sot);
+
+  // Architecture spec card
+  renderArchitectureCard(sot);
+
+  // Code review card
+  renderCodeReviewCard(sot);
 
   // GitHub publish card (only in readiness / completed phases)
   if (artifactsProjectId) {
@@ -598,6 +609,83 @@ function renderReadinessChecklist(sot) {
     badge.className = "readinessBadge " + (done === total ? "evalOk" : done > 0 ? "evalWarn" : "evalBad");
     badge.textContent = `${done}/${total}`;
     cardTitle.appendChild(badge);
+  }
+}
+
+function renderArchitectureCard(sot) {
+  const card = document.getElementById("cardArchitecture");
+  const body = document.getElementById("architectureBody");
+  if (!card || !body) return;
+
+  const arch = sot.architecture_spec;
+  const phase = sot.current_phase || "";
+  if (!arch || !["coding", "milestone", "readiness", "completed"].includes(phase)) {
+    card.classList.add("hidden");
+    return;
+  }
+
+  card.classList.remove("hidden");
+  body.innerHTML = "";
+
+  const style = document.createElement("div");
+  style.className = "archStyle";
+  style.innerHTML = `<strong>Style:</strong> ${escapeHtml(arch.style || "layered")}`;
+  body.appendChild(style);
+
+  if (arch.file_tree && arch.file_tree.length) {
+    const treeLabel = document.createElement("div");
+    treeLabel.className = "archSectionLabel";
+    treeLabel.textContent = `File tree (${arch.file_tree.length} files)`;
+    body.appendChild(treeLabel);
+
+    const treeList = document.createElement("div");
+    treeList.className = "archFileTree mono";
+    treeList.textContent = arch.file_tree.slice(0, 20).join("\n") + (arch.file_tree.length > 20 ? "\n…" : "");
+    body.appendChild(treeList);
+  }
+
+  if (arch.api_contracts && arch.api_contracts.length) {
+    const apiLabel = document.createElement("div");
+    apiLabel.className = "archSectionLabel";
+    apiLabel.textContent = `API contracts (${arch.api_contracts.length})`;
+    body.appendChild(apiLabel);
+    for (const c of arch.api_contracts.slice(0, 5)) {
+      const row = document.createElement("div");
+      row.className = "archApiRow mono";
+      row.textContent = `${c.method || "GET"} ${c.path || "/"}`;
+      body.appendChild(row);
+    }
+  }
+}
+
+function renderCodeReviewCard(sot) {
+  const card = document.getElementById("cardCodeReview");
+  const body = document.getElementById("codeReviewBody");
+  if (!card || !body) return;
+
+  const plan = sot.coding_plan || [];
+  const idx = sot.current_milestone_index ?? 0;
+  const milestone = plan[idx];
+  const feedback = milestone?.review_feedback;
+  const phase = sot.current_phase || "";
+
+  if (!feedback || !["milestone", "readiness", "completed"].includes(phase)) {
+    card.classList.add("hidden");
+    return;
+  }
+
+  card.classList.remove("hidden");
+  const isBlock = feedback.includes("**Severity**: block");
+  const isWarn = feedback.includes("**Severity**: warn");
+  card.classList.toggle("card-warn", isBlock || isWarn);
+
+  body.innerHTML = "";
+  const lines = feedback.split("\n");
+  for (const line of lines) {
+    const div = document.createElement("div");
+    div.className = line.startsWith("[CRITICAL]") ? "reviewCritical" : line.startsWith("[WARN]") ? "reviewWarn" : "reviewInfo";
+    div.textContent = line;
+    body.appendChild(div);
   }
 }
 
