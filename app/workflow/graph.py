@@ -16,7 +16,10 @@ Graph structure:
         │
         ├─ commercials → commercials_gate → [waiting→END | rejected→commercials | approved→sow]
         │
-        ├─ sow    →  sow_gate       → [waiting→END | rejected→sow | approved→coding_plan]
+        ├─ sow    →  sow_gate       → [waiting→END | rejected→sow | approved→user_guide]
+        │
+        ├─ user_guide  → [waiting→END | continue→coding_plan]
+        │                  (asks user if they want a user guide; generates on yes)
         │
         ├─ coding_plan → coding_plan_gate → [waiting→END | rejected→coding_plan
         │                                     | approved→coding_milestone]
@@ -68,6 +71,7 @@ def _route_entry(state: WorkflowState) -> str:
         "prd":         "prd_gate",           # re-enter at gate; skip re-generation
         "commercials": "commercials_gate",   # re-enter at gate on resume
         "sow":         "sow_gate",           # re-enter at gate; skip re-generation
+        "user_guide":  "user_guide",         # re-enter at user guide node on resume
         "coding":      "coding_plan_gate",   # re-enter at plan gate on resume
         "milestone":   "milestone_gate",     # re-enter at milestone gate on resume
         "readiness":   "readiness_gate",     # re-enter at readiness gate on resume
@@ -126,6 +130,13 @@ def _route_after_sow_gate(state: WorkflowState) -> str:
     return "approved"
 
 
+def _route_after_user_guide(state: WorkflowState) -> str:
+    """Pause if waiting for user reply; otherwise always continue to coding_plan."""
+    if state.get("pause_reason"):
+        return "waiting"
+    return "continue"
+
+
 def _route_after_coding_plan_gate(state: WorkflowState) -> str:
     if state.get("pause_reason"):
         return "waiting"
@@ -174,6 +185,7 @@ def build_graph() -> StateGraph:
         readiness_approval_gate,
     )
     from app.workflow.nodes.sow import sow_phase
+    from app.workflow.nodes.user_guide import user_guide_phase
     from app.workflow.nodes.coding_plan import coding_plan_phase
     from app.workflow.nodes.coding_milestone import coding_milestone_phase
     from app.workflow.nodes.readiness import readiness_phase
@@ -192,6 +204,7 @@ def build_graph() -> StateGraph:
     g.add_node("commercials_gate",  commercials_approval_gate)
     g.add_node("sow",               sow_phase)
     g.add_node("sow_gate",          sow_approval_gate)
+    g.add_node("user_guide",        user_guide_phase)
     g.add_node("coding_plan",       coding_plan_phase)
     g.add_node("coding_plan_gate",  coding_plan_approval_gate)
     g.add_node("coding_milestone",  coding_milestone_phase)
@@ -210,6 +223,7 @@ def build_graph() -> StateGraph:
             "prd_gate":          "prd_gate",
             "commercials_gate":  "commercials_gate",
             "sow_gate":          "sow_gate",
+            "user_guide":        "user_guide",
             "coding_plan_gate":  "coding_plan_gate",
             "milestone_gate":    "milestone_gate",
             "readiness_gate":    "readiness_gate",
@@ -266,11 +280,18 @@ def build_graph() -> StateGraph:
         {"waiting": END, "rejected": "commercials", "approved": "sow"},
     )
 
-    # Conditional edges — SOW gate → coding plan (was → end)
+    # Conditional edges — SOW gate → user_guide (ask if guide wanted) → coding_plan
     g.add_conditional_edges(
         "sow_gate",
         _route_after_sow_gate,
-        {"waiting": END, "rejected": "sow", "approved": "coding_plan"},
+        {"waiting": END, "rejected": "sow", "approved": "user_guide"},
+    )
+
+    # Conditional edges — user_guide (pause if waiting; continue → coding_plan)
+    g.add_conditional_edges(
+        "user_guide",
+        _route_after_user_guide,
+        {"waiting": END, "continue": "coding_plan"},
     )
 
     # Conditional edges — coding plan gate

@@ -141,6 +141,12 @@ def _build_server_details_context(
     }
 
 
+def _build_user_guide_context(sot: ProjectState, project_name: str, version: int) -> dict:
+    return {
+        "content": sot.user_guide_content or "# User Guide\n\n> Guide content not yet generated.",
+    }
+
+
 _CONTEXT_BUILDERS = {
     "prd": _build_prd_context,
     "sow": _build_sow_context,
@@ -151,6 +157,7 @@ _CONTEXT_BUILDERS = {
     "server_details_infra": lambda sot, project_name, version: _build_server_details_context(
         sot, project_name, version, audience="Infra Team"
     ),
+    "user_guide": _build_user_guide_context,
 }
 
 _TEMPLATE_FILES = {
@@ -159,6 +166,7 @@ _TEMPLATE_FILES = {
     "change_request": "change_request.md.j2",
     "server_details_client": "server_details.md.j2",
     "server_details_infra": "server_details.md.j2",
+    "user_guide": "user_guide.md.j2",
 }
 
 

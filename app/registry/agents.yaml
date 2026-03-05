@@ -303,6 +303,32 @@ agents:
       max_tool_calls: 15
       budget_usd: 1.00
 
+  - name: UserGuideAgent
+    role: technical_writer
+    description: >
+      Generates a comprehensive project-specific end-user guide in Markdown
+      after the user confirms they want one (post-SOW, pre-coding-plan).
+      Sections: overview, getting started, key features, configuration reference,
+      API reference, troubleshooting, glossary. Project-type aware content focus
+      (RAG, web_app, CRM, voice_chatbot). Output stored as "user_guide" artifact
+      on the dashboard.
+    capabilities:
+      - user_guide_generation
+      - technical_writing
+      - project_type_routing
+    required_inputs:
+      - scope
+      - requirements
+      - project_type
+      - user_guide_requested
+    output_schema: UserGuidePatch
+    prompt_template_path: prompts/user_guide.j2
+    allowed_tools: []
+    limits:
+      max_steps: 3
+      max_tool_calls: 0
+      budget_usd: 1.50
+
 # ── Future stubs ──────────────────────────────────────────────────
 #  - name: QAAuditorAgent
 #  - name: BacklogAgent

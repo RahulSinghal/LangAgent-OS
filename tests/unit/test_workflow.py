@@ -448,8 +448,8 @@ def test_graph_invoke_technical_design_fast_tracks_to_coding_plan():
     assert len(final.coding_plan) > 0  # coding_plan was generated
 
 
-def test_graph_invoke_approved_sow_proceeds_to_coding_plan():
-    """SOW approved → coding_plan runs → pauses at coding_plan_gate for tech lead sign-off."""
+def test_graph_invoke_approved_sow_proceeds_to_user_guide_gate():
+    """SOW approved → user_guide node asks if guide is wanted → pauses waiting_user."""
     settings.USE_MOCK_AGENTS = True
     from app.sot.state import create_initial_state, ProjectState
     sot = create_initial_state(project_id=99, run_id=1)
@@ -466,7 +466,33 @@ def test_graph_invoke_approved_sow_proceeds_to_coding_plan():
         "approval_id": None,
     }
     result = wf.invoke(state)
-    # After SOW approval the workflow now proceeds to coding_plan_gate, not end.
+    # After SOW approval the workflow now pauses at the user_guide node
+    # to ask the user if they want a guide (waiting_user, not waiting_approval).
+    assert result["pause_reason"] == "waiting_user"
+    final = ProjectState(**result["sot"])
+    assert final.current_phase == Phase.USER_GUIDE
+
+
+def test_graph_invoke_user_guide_skipped_proceeds_to_coding_plan():
+    """user_guide=no → workflow proceeds to coding_plan → pauses at coding_plan_gate."""
+    settings.USE_MOCK_AGENTS = True
+    from app.sot.state import create_initial_state, ProjectState
+    sot = create_initial_state(project_id=99, run_id=1)
+    sot = apply_patch(sot, {
+        "current_phase": "user_guide",
+        "approvals_status": {"sow": "approved"},
+        "last_user_message": "no",
+    })
+    wf = get_workflow()
+    state: WorkflowState = {
+        "sot": sot.model_dump_jsonb(),
+        "run_id": 1,
+        "pause_reason": None,
+        "bot_response": None,
+        "approval_id": None,
+    }
+    result = wf.invoke(state)
+    # Skipped guide → coding_plan runs → pauses at coding_plan_gate
     assert result["pause_reason"] == "waiting_approval"
     final = ProjectState(**result["sot"])
     assert final.current_phase == Phase.CODING

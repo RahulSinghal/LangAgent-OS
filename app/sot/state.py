@@ -27,6 +27,7 @@ class Phase(str, Enum):
     COMMERCIALS = "commercials"
     SOW = "sow"
     NEGOTIATION = "negotiation"
+    USER_GUIDE = "user_guide"     # Optional: user guide generation gate (after SOW)
     CODING = "coding"             # Step 4: milestone plan awaiting tech lead approval
     MILESTONE = "milestone"       # Step 4: per-milestone code generation + review loop
     READINESS = "readiness"
@@ -308,6 +309,13 @@ class ProjectState(BaseModel):
     project_type: str = "generic"
     tech_stack: TechStackSpec | None = None
     architecture_spec: ArchitectureSpec | None = None
+
+    # ── User guide ────────────────────────────────────────────────────────────
+    # Set to True/False after the user guide gate asks the user (after SOW approval).
+    # None = not yet asked.
+    user_guide_requested: bool | None = None
+    # LLM-generated markdown content for the project user guide (if requested).
+    user_guide_content: str | None = None
 
     # ── Phase 4: Coverage-score driven discovery ───────────────────────────────
     coverage_scores: dict[str, float] = Field(default_factory=lambda: {
