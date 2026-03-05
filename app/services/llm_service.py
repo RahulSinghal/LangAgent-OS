@@ -14,10 +14,13 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from app.core.config import settings
 from app.core.metrics import LLMUsage, get_run_collector
+
+_log = logging.getLogger(__name__)
 
 
 def call_llm(
@@ -33,7 +36,11 @@ def call_llm(
         response_format: "text" for plain text, "json" for JSON object mode.
 
     Returns:
-        The LLM's response as a string.
+        The LLM's response as a string (guaranteed non-empty).
+
+    Raises:
+        RuntimeError: After exhausting retries on rate-limit errors.
+        ValueError:   If the LLM returns an empty response after all retries.
     """
     import litellm  # lazy import — not required when mocked in tests
 
@@ -68,9 +75,47 @@ def call_llm(
     if response_format == "json":
         kwargs["response_format"] = {"type": "json_object"}
 
-    started = time.perf_counter()
-    response = litellm.completion(**kwargs)
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    max_retries = settings.LLM_MAX_RETRIES
+    backoff_base = 2  # seconds; doubles each retry: 2s, 4s, 8s, …
+
+    response = None
+    elapsed_ms = 0
+    for attempt in range(max_retries + 1):
+        started = time.perf_counter()
+        try:
+            response = litellm.completion(**kwargs)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            break  # success — exit retry loop
+        except litellm.RateLimitError as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if attempt < max_retries:
+                sleep_s = backoff_base * (2 ** attempt)
+                _log.warning(
+                    "LLM rate-limit hit (attempt %d/%d). Retrying in %ds. error=%s",
+                    attempt + 1,
+                    max_retries + 1,
+                    sleep_s,
+                    exc,
+                )
+                time.sleep(sleep_s)
+            else:
+                raise RuntimeError(
+                    f"LLM rate-limit persisted after {max_retries} retries: {exc}"
+                ) from exc
+
+    # Validate response content — guard against None / empty strings.
+    content: str | None = None
+    if response is not None:
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError):
+            content = None
+
+    if not content:
+        raise ValueError(
+            f"LLM returned an empty response (model={model}, "
+            f"format={response_format}). Cannot continue."
+        )
 
     # Best-effort metrics capture (used by dashboard/project spend).
     try:
@@ -118,7 +163,7 @@ def call_llm(
         # Never break product flow due to metrics.
         pass
 
-    return response.choices[0].message.content
+    return content
 
 
 def llm_healthcheck() -> tuple[bool, str | None]:
@@ -144,7 +189,10 @@ def call_llm_json(system_prompt: str, user_message: str) -> dict:
     Returns:
         Parsed dict. Returns {} on JSON parse failure (never raises).
     """
-    raw = call_llm(system_prompt, user_message, response_format="json")
+    try:
+        raw = call_llm(system_prompt, user_message, response_format="json")
+    except (RuntimeError, ValueError):
+        return {}
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, ValueError):

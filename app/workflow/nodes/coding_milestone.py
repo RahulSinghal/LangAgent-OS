@@ -15,11 +15,15 @@ The milestone_gate conditional edge decides whether to loop back here
 
 from __future__ import annotations
 
+import logging
+
 from app.agents.code_review_agent import CodeReviewAgent
 from app.agents.milestone_code_agent import MilestoneCodeAgent
 from app.agents.mock_agents import MockMilestoneCodeAgent
 from app.core.runtime import use_mock_agents
 from app.sot.state import ProjectState
+
+_log = logging.getLogger(__name__)
 
 
 def coding_milestone_phase(state: dict) -> dict:
@@ -30,12 +34,25 @@ def coding_milestone_phase(state: dict) -> dict:
 
     Returns:
         Partial WorkflowState update with updated SoT.
+
+    Raises:
+        ValueError: Re-raised if the code agent returns a malformed patch, so
+                    the run engine can mark the run as 'error'.
     """
     sot = ProjectState(**state["sot"])
 
     # Step 1: Generate code for the milestone
     code_agent = MockMilestoneCodeAgent() if use_mock_agents() else MilestoneCodeAgent()
-    sot_after_code = code_agent.execute(sot)
+    try:
+        sot_after_code = code_agent.execute(sot)
+    except ValueError as exc:
+        _log.error(
+            "MilestoneCodeAgent returned a malformed patch (run_id=%s, milestone_index=%d): %s",
+            state.get("run_id"),
+            sot.current_milestone_index,
+            exc,
+        )
+        raise
 
     # Step 2: Automated code review (always real — mock mode still runs review)
     review_agent = CodeReviewAgent()

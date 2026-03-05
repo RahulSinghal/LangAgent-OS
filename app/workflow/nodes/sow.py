@@ -6,11 +6,15 @@ Artifact rendering (Jinja2 → file) is handled by _process_result in runs.py.
 
 from __future__ import annotations
 
+import logging
+
 from app.agents.sow_agent import SOWAgent
 from app.agents.mock_agents import MockSOWAgent
 from app.agents.qa_auditor import QAAuditorAgent
 from app.core.runtime import use_mock_agents
 from app.sot.state import ProjectState
+
+_log = logging.getLogger(__name__)
 
 
 def sow_phase(state: dict) -> dict:
@@ -21,15 +25,28 @@ def sow_phase(state: dict) -> dict:
 
     Returns:
         Partial WorkflowState update with updated SoT.
+
+    Raises:
+        ValueError: Re-raised if the agent returns a malformed patch, so the
+                    run engine can mark the run as 'error' rather than leaving
+                    it stuck in 'running'.
     """
     sot = ProjectState(**state["sot"])
 
     agent = MockSOWAgent() if use_mock_agents() else SOWAgent()
-    new_sot = agent.execute(sot)
+    try:
+        new_sot = agent.execute(sot)
+    except ValueError as exc:
+        _log.error("SOWAgent returned a malformed patch (run_id=%s): %s", state.get("run_id"), exc)
+        raise
 
     # QA audit runs in real mode only — advisory, never blocks.
     if not use_mock_agents():
-        new_sot = QAAuditorAgent().execute(new_sot)
+        try:
+            new_sot = QAAuditorAgent().execute(new_sot)
+        except Exception:
+            # QA audit failure must never block the workflow.
+            pass
 
     return {
         "sot": new_sot.model_dump_jsonb(),

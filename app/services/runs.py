@@ -9,11 +9,37 @@ Phase 2:  market_eval gate support (approval without artifact rendering).
 
 from __future__ import annotations
 
+import logging
+import re
 import time
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.models import Run
+
+_log = logging.getLogger(__name__)
+
+# Control characters to strip from user input (keeps \t \n \r).
+_CTRL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_user_input(text: str | None) -> str | None:
+    """Strip control characters and enforce a maximum length.
+
+    Protects against prompt injection via malicious user messages fed into
+    LLM system prompts.  Legitimate punctuation and Unicode are preserved.
+    """
+    if text is None:
+        return None
+    # Remove ASCII control characters (non-printable, non-whitespace)
+    text = _CTRL_CHAR_RE.sub("", text)
+    # Hard cap to prevent runaway context window bloat
+    max_len = settings.MAX_USER_MESSAGE_LENGTH
+    if len(text) > max_len:
+        _log.warning("User message truncated from %d to %d chars", len(text), max_len)
+        text = text[:max_len]
+    return text
 
 
 # ── Basic CRUD ────────────────────────────────────────────────────────────────
@@ -65,7 +91,12 @@ def list_runs(db: Session, project_id: int) -> list[Run]:
 # ── Run engine helpers ────────────────────────────────────────────────────────
 
 def _process_result(db: Session, run_id: int, result: dict) -> Run:
-    """Save final snapshot, render artifacts, create approval records, update run status."""
+    """Save final snapshot, render artifacts, create approval records, update run status.
+
+    All DB writes are performed inside a single nested transaction (savepoint)
+    so that a partial failure rolls back all writes for this result, leaving
+    the run in the last-good-snapshot state rather than a partial one.
+    """
     from app.services.snapshots import save_snapshot
     from app.sot.state import ProjectState
 
@@ -74,65 +105,71 @@ def _process_result(db: Session, run_id: int, result: dict) -> Run:
     phase = final_sot.current_phase.value
     bot_response = result.get("bot_response")
 
-    if pause_reason == "waiting_approval":
-        # Render artifacts (for approval types that have templates) and ensure Approval records.
-        run = db.get(Run, run_id)
-        if run is not None:
-            from app.services.approvals import ensure_pending_approval
+    try:
+        with db.begin_nested():  # savepoint — all writes here are atomic
+            if pause_reason == "waiting_approval":
+                # Render artifacts (for approval types that have templates) and ensure Approval records.
+                run = db.get(Run, run_id)
+                if run is not None:
+                    from app.services.approvals import ensure_pending_approval
 
-            pending_types = [
-                k for k, v in final_sot.approvals_status.items()
-                if v.value == "pending"
-            ]
+                    pending_types = [
+                        k for k, v in final_sot.approvals_status.items()
+                        if v.value == "pending"
+                    ]
 
-            # Ensure a DB approval exists for every pending approval type
-            for t in pending_types:
-                ensure_pending_approval(
-                    db,
-                    project_id=run.project_id,
-                    run_id=run_id,
-                    approval_type=t,
-                )
-
-            # Render any missing artifacts that have templates.
-            from app.artifacts.generator import render_artifact
-            for t in pending_types:
-                if t not in final_sot.artifacts_index:
-                    try:
-                        _, final_sot = render_artifact(
-                            artifact_type=t,
-                            state=final_sot,
-                            db=db,
+                    # Ensure a DB approval exists for every pending approval type
+                    for t in pending_types:
+                        ensure_pending_approval(
+                            db,
+                            project_id=run.project_id,
                             run_id=run_id,
+                            approval_type=t,
                         )
-                    except ValueError:
-                        # No template/context builder for this approval type (e.g., market_eval)
-                        continue
 
-    # ── Persist final SoT snapshot ────────────────────────────────────────────
-    save_snapshot(db, run_id=run_id, state=final_sot)
+                    # Render any missing artifacts that have templates.
+                    from app.artifacts.generator import render_artifact
+                    for t in pending_types:
+                        if t not in final_sot.artifacts_index:
+                            try:
+                                _, final_sot = render_artifact(
+                                    artifact_type=t,
+                                    state=final_sot,
+                                    db=db,
+                                    run_id=run_id,
+                                )
+                            except ValueError:
+                                # No template/context builder for this approval type
+                                continue
 
-    # ── Update run status ─────────────────────────────────────────────────────
-    if pause_reason == "waiting_user":
-        status, node = "waiting_user", "discovery"
-    elif pause_reason == "waiting_approval":
-        status, node = "waiting_approval", f"{phase}_gate"
-    elif phase == "completed":
-        status, node = "completed", "end"
-    else:
-        status, node = "running", phase
+            # ── Persist final SoT snapshot ────────────────────────────────────────────
+            save_snapshot(db, run_id=run_id, state=final_sot)
 
-    updated = update_run_status(db, run_id, status=status, current_node=node)
+            # ── Update run status ─────────────────────────────────────────────────────
+            if pause_reason == "waiting_user":
+                status, node = "waiting_user", "discovery"
+            elif pause_reason == "waiting_approval":
+                status, node = "waiting_approval", f"{phase}_gate"
+            elif phase == "completed":
+                status, node = "completed", "end"
+            else:
+                status, node = "running", phase
 
-    # Persist assistant/system response into session history for later replay
-    if bot_response:
-        try:
-            run = db.get(Run, run_id)
-            if run and run.session_id:
-                from app.services.sessions import add_message
-                add_message(db, session_id=run.session_id, role="assistant", content=str(bot_response))
-        except Exception:
-            pass
+            updated = update_run_status(db, run_id, status=status, current_node=node)
+
+            # Persist assistant/system response into session history for later replay
+            if bot_response:
+                try:
+                    run = db.get(Run, run_id)
+                    if run and run.session_id:
+                        from app.services.sessions import add_message
+                        add_message(db, session_id=run.session_id, role="assistant", content=str(bot_response))
+                except Exception:
+                    pass
+
+    except Exception as exc:
+        _log.error("_process_result failed for run %d: %s", run_id, exc, exc_info=True)
+        raise
 
     return updated
 
@@ -172,6 +209,9 @@ def start_run(
     from app.workflow.graph import WorkflowState, get_workflow
     from app.core.metrics import RunMetricCollector, reset_run_collector, set_run_collector
 
+    # Sanitize user input before it touches the SoT or LLM prompts.
+    user_message = _sanitize_user_input(user_message)
+
     # Create the run record
     run = create_run(db, project_id=project_id, session_id=session_id, status="running")
 
@@ -186,12 +226,7 @@ def start_run(
         doc_type = ingestion.get("document_type", "unknown")
         doc_summary = ingestion.get("summary_message", "")
 
-        # document_type is set in initial_patch (from sot_patch) so discovery
-        # knows which phase to fast-track to after gap Q&A completes.
-        # No manual current_phase override — the graph handles routing generically.
-
         if doc_summary:
-            # User note (if any) is appended so it takes semantic precedence.
             combined_message = (
                 f"{doc_summary}\n\nUser note: {user_message}" if user_message else doc_summary
             )
@@ -226,11 +261,23 @@ def start_run(
     started = time.perf_counter()
     try:
         result = get_workflow().invoke(wf_state)
+    except Exception as exc:
+        runtime_ms = int((time.perf_counter() - started) * 1000)
+        reset_run_collector(token)
+        _log.error("Workflow invocation failed for run %d: %s", run.id, exc, exc_info=True)
+        update_run_status(db, run.id, status="error")
+        raise
     finally:
         runtime_ms = int((time.perf_counter() - started) * 1000)
         reset_run_collector(token)
 
-    _process_result(db, run.id, result)
+    try:
+        _process_result(db, run.id, result)
+    except Exception as exc:
+        _log.error("_process_result failed for run %d: %s", run.id, exc, exc_info=True)
+        update_run_status(db, run.id, status="error")
+        raise
+
     try:
         from app.services.provenance import record_run_metrics
 
@@ -268,16 +315,9 @@ def resume_run(
     approval decision, then re-invokes the graph.  The conditional entry
     point routes the graph to the correct node based on current_phase.
 
-    When a document is shared mid-conversation (document_content provided),
-    it is ingested, extracted content is added to the SoT, and document_type
-    is recorded.  The discovery node then runs gap Q&A as needed; on
-    completion it advances current_phase and the graph fast-tracks:
-      - prd              → prd_gate  (uploaded doc IS the PRD)
-      - sow              → sow_gate  (uploaded doc IS the SOW)
-      - market_eval      → market_eval_gate
-      - commercials      → commercials_gate
-      - technical_design → coding_plan (generates milestone plan from the design)
-      - brd / unknown    → normal market_eval flow
+    A database row-level lock (SELECT FOR UPDATE) is acquired on the run row
+    before checking its status, preventing two concurrent callers from both
+    invoking the workflow for the same run simultaneously.
 
     Args:
         db:                Active DB session.
@@ -291,7 +331,7 @@ def resume_run(
         The updated Run ORM object.
 
     Raises:
-        ValueError: Run not found or no snapshot exists.
+        ValueError: Run not found, already running, or no snapshot exists.
     """
     from app.sot.patch import apply_patch
     from app.sot.state import ProjectState
@@ -299,9 +339,23 @@ def resume_run(
     from app.workflow.graph import WorkflowState, get_workflow
     from app.core.metrics import RunMetricCollector, reset_run_collector, set_run_collector
 
-    run = get_run(db, run_id)
+    # Sanitize user input before it touches the SoT or LLM prompts.
+    user_message = _sanitize_user_input(user_message)
+
+    # ── Concurrent-access lock ────────────────────────────────────────────────
+    # Acquire a row-level lock on the Run row so that only one caller can
+    # transition it from a paused state to "running" at a time.  The lock is
+    # released when we commit the status update below, which is atomic with
+    # the status write, so a competing caller will see status="running" when
+    # it acquires the lock and raise immediately.
+    run = db.query(Run).with_for_update().filter(Run.id == run_id).first()
     if run is None:
         raise ValueError(f"Run {run_id} not found")
+    if run.status == "running":
+        raise ValueError(
+            f"Run {run_id} is already being processed. "
+            "Wait for the current invocation to complete before resuming."
+        )
 
     sot = load_latest_snapshot(db, run_id)
     if sot is None:
@@ -313,23 +367,16 @@ def resume_run(
         from app.services.document_ingestion import ingest_document
         ingestion = ingest_document(document_content, filename=document_filename or "")
         doc_sot_patch = ingestion.get("sot_patch", {})
-        doc_type = ingestion.get("document_type", "unknown")
         doc_summary = ingestion.get("summary_message", "")
 
         # Merge extracted data into SoT immediately
         if doc_sot_patch:
             sot = apply_patch(sot, doc_sot_patch)
 
-        # Build combined message so the user note + doc summary are both captured
         if doc_summary:
             combined_message = (
                 f"{doc_summary}\n\nUser note: {user_message}" if user_message else doc_summary
             )
-
-        # document_type is already set in sot via sot_patch.
-        # Phase routing is handled generically by the discovery node and
-        # _route_after_discovery: after gap Q&A completes, the graph fast-tracks
-        # to whichever gate/node corresponds to the detected document type.
 
     # Apply incoming context
     patch: dict = {}
@@ -349,6 +396,8 @@ def resume_run(
     if patch:
         sot = apply_patch(sot, patch)
 
+    # Commit "running" status now — this also releases the row-level lock so
+    # other requests can see the updated status without blocking.
     update_run_status(db, run_id, status="running")
 
     wf_state: WorkflowState = {
@@ -364,11 +413,23 @@ def resume_run(
     started = time.perf_counter()
     try:
         result = get_workflow().invoke(wf_state)
+    except Exception as exc:
+        runtime_ms = int((time.perf_counter() - started) * 1000)
+        reset_run_collector(token)
+        _log.error("Workflow invocation failed for run %d: %s", run_id, exc, exc_info=True)
+        update_run_status(db, run_id, status="error")
+        raise
     finally:
         runtime_ms = int((time.perf_counter() - started) * 1000)
         reset_run_collector(token)
 
-    _process_result(db, run_id, result)
+    try:
+        _process_result(db, run_id, result)
+    except Exception as exc:
+        _log.error("_process_result failed for run %d: %s", run_id, exc, exc_info=True)
+        update_run_status(db, run_id, status="error")
+        raise
+
     try:
         from app.services.provenance import record_run_metrics
 

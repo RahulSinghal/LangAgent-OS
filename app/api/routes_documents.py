@@ -10,6 +10,8 @@ from io import BytesIO
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from app.core.config import settings
+
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
@@ -68,6 +70,17 @@ async def extract_document_text(file: UploadFile = File(...)) -> dict:
     data = await file.read()
     if not data:
         raise HTTPException(status_code=422, detail="Empty file upload")
+
+    max_bytes = settings.MAX_UPLOAD_SIZE_BYTES
+    if max_bytes > 0 and len(data) > max_bytes:
+        max_mb = max_bytes / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File '{filename}' ({len(data) / (1024 * 1024):.1f} MB) exceeds "
+                f"the maximum upload size of {max_mb:.0f} MB."
+            ),
+        )
 
     name_lower = filename.lower()
 

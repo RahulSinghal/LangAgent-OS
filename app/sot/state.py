@@ -345,6 +345,11 @@ class ProjectState(BaseModel):
     # e.g. {"artifact_type": "prd", "comment": "Missing non-functional reqs"}
     rejection_feedback: dict[str, Any] | None = None
 
+    # Tracks how many times each artifact type has been rejected in this run.
+    # The approval gate uses this to circuit-break infinite rejection loops.
+    # e.g. {"prd": 2, "sow": 1}
+    rejection_counts: dict[str, int] = Field(default_factory=dict)
+
     # ── Step 4: Milestone-based code generation ────────────────────────────────
     coding_plan: list[MilestoneItem] = Field(default_factory=list)
     current_milestone_index: int = 0

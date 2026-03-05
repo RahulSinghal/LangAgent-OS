@@ -83,6 +83,24 @@ class Settings(BaseSettings):
     # "llm"           — LLM generates TaskDAG; falls back to deterministic on error
     SUPERVISOR_MODE: str = "deterministic"
 
+    # ── LLM resilience ────────────────────────────────────────────
+    # Retries on RateLimitError with exponential backoff (2s, 4s, 8s, …).
+    LLM_MAX_RETRIES: int = 3
+
+    # ── Approval loop safety ───────────────────────────────────────
+    # Maximum number of times an artifact can be rejected before the run
+    # errors out instead of looping indefinitely.
+    MAX_REJECTION_RETRIES: int = 3
+
+    # ── Upload safety ──────────────────────────────────────────────
+    # Maximum file size (bytes) accepted by /documents/extract endpoints.
+    # Default: 20 MB.  Set to 0 to disable the check.
+    MAX_UPLOAD_SIZE_BYTES: int = 20 * 1024 * 1024  # 20 MB
+
+    # ── Input safety ───────────────────────────────────────────────
+    # Maximum length (characters) of a single user message fed into the SoT.
+    MAX_USER_MESSAGE_LENGTH: int = 10_000
+
     # ── Testing / Deterministic mode ──────────────────────────────
     USE_MOCK_AGENTS: bool = False
 

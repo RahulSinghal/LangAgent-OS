@@ -14,9 +14,13 @@ Phase 4 adds:
 
 from __future__ import annotations
 
+import logging
+
 from app.core.config import settings
 from app.sot.patch import apply_patch
 from app.sot.state import ApprovalStatus, ProjectState
+
+_log = logging.getLogger(__name__)
 
 
 def _eval_coverage_for_milestone(project_id: int | None, milestone_id: str) -> float:
@@ -74,6 +78,24 @@ def _gate(state: dict, artifact_type: str) -> dict:
 
     # ── Rejected — load comment, patch rejection_feedback, route back ─────────
     if status == ApprovalStatus.REJECTED:
+        # Circuit-breaker: if the artifact has been rejected too many times,
+        # error out instead of looping forever.
+        rejection_counts = dict(sot.rejection_counts)
+        rejection_counts[artifact_type] = rejection_counts.get(artifact_type, 0) + 1
+        max_retries = settings.MAX_REJECTION_RETRIES
+        if rejection_counts[artifact_type] > max_retries:
+            _log.error(
+                "Rejection circuit breaker triggered for %s after %d rejections "
+                "(run_id=%s). Marking run as error.",
+                artifact_type,
+                rejection_counts[artifact_type],
+                state.get("run_id"),
+            )
+            raise RuntimeError(
+                f"Artifact '{artifact_type}' rejected {rejection_counts[artifact_type]} times "
+                f"(max {max_retries}). Escalate for manual review."
+            )
+
         comment = _load_rejection_comment(state.get("run_id"), artifact_type)
 
         # Reset approval to pending so the gate will pause again after re-generation
@@ -91,12 +113,14 @@ def _gate(state: dict, artifact_type: str) -> dict:
                 "artifact_type": artifact_type,
                 "comment": comment,
             },
+            "rejection_counts": rejection_counts,
         })
         return {
             "sot": updated_sot.model_dump_jsonb(),
             "pause_reason": None,  # do NOT pause — loop back to agent node
             "bot_response": (
-                f"{artifact_type.upper()} was rejected. "
+                f"{artifact_type.upper()} was rejected "
+                f"(attempt {rejection_counts[artifact_type]}/{max_retries}). "
                 "Regenerating with reviewer feedback…"
             ),
         }
@@ -229,6 +253,23 @@ def milestone_approval_gate(state: dict) -> dict:
 
     # ── Rejected — load comment, patch rejection_feedback, route back ─────────
     if status == ApprovalStatus.REJECTED:
+        # Circuit-breaker: same protection as _gate().
+        rejection_counts = dict(sot.rejection_counts)
+        rejection_counts[approval_key] = rejection_counts.get(approval_key, 0) + 1
+        max_retries = settings.MAX_REJECTION_RETRIES
+        if rejection_counts[approval_key] > max_retries:
+            _log.error(
+                "Rejection circuit breaker triggered for milestone %s after %d rejections "
+                "(run_id=%s). Marking run as error.",
+                approval_key,
+                rejection_counts[approval_key],
+                state.get("run_id"),
+            )
+            raise RuntimeError(
+                f"Milestone '{milestone.name}' rejected {rejection_counts[approval_key]} times "
+                f"(max {max_retries}). Escalate for manual review."
+            )
+
         comment = _load_rejection_comment(state.get("run_id"), approval_key)
 
         updated_plan = [m.model_dump() for m in plan]
@@ -244,12 +285,14 @@ def milestone_approval_gate(state: dict) -> dict:
                 "artifact_type": approval_key,
                 "comment": comment,
             },
+            "rejection_counts": rejection_counts,
         })
         return {
             "sot": new_sot.model_dump_jsonb(),
             "pause_reason": None,
             "bot_response": (
-                f"Milestone '{milestone.name}' rejected. "
+                f"Milestone '{milestone.name}' rejected "
+                f"(attempt {rejection_counts[approval_key]}/{max_retries}). "
                 "Regenerating with reviewer feedback…"
             ),
         }
