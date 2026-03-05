@@ -1,4 +1,4 @@
-"""Health check endpoint — verifies the API and DB connection are alive."""
+"""Health check endpoints — verifies the API, DB, and LLM connection are alive."""
 
 import time
 
@@ -22,6 +22,13 @@ class HealthResponse(BaseModel):
     database: str
 
 
+class LLMHealthResponse(BaseModel):
+    status: str          # "ok" | "error"
+    provider: str
+    model: str
+    error: str | None = None
+
+
 @router.get("/health", response_model=HealthResponse, summary="Health check")
 def health(
     settings: Settings = Depends(get_settings),
@@ -39,4 +46,23 @@ def health(
         version=settings.APP_VERSION,
         uptime_seconds=round(time.time() - _start_time, 2),
         database=db_status,
+    )
+
+
+@router.get("/health/llm", response_model=LLMHealthResponse, summary="LLM provider health check")
+def llm_health(settings: Settings = Depends(get_settings)) -> LLMHealthResponse:
+    """Pings the configured LLM provider with a minimal prompt to verify credentials.
+
+    This endpoint performs a real (low-cost) LLM call, so it may take a few
+    seconds.  Use it to confirm that the API key and model are correctly
+    configured before starting a run.
+    """
+    from app.services.llm_service import llm_healthcheck
+
+    ok, error = llm_healthcheck()
+    return LLMHealthResponse(
+        status="ok" if ok else "error",
+        provider=settings.LLM_PROVIDER,
+        model=settings.LLM_MODEL,
+        error=error,
     )

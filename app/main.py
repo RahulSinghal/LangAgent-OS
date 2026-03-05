@@ -80,9 +80,11 @@ def create_app() -> FastAPI:
             return FileResponse(str(ui_dir / "index.html"))
 
     # ── CORS ─────────────────────────────────────────────────────
+    # Origins are read from ALLOWED_ORIGINS in .env (comma-separated list or "*").
+    # Default is "*" (open) for local development; restrict in production.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],   # Tighten in Phase 3 with org-scoped origins
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -119,6 +121,10 @@ def create_app() -> FastAPI:
     # GitHub publish integration
     from app.api.routes_github import router as github_router
     app.include_router(github_router, prefix=settings.API_PREFIX)
+
+    # GitHub webhook receiver (inbound CI feedback)
+    from app.api.routes_github_webhook import router as github_webhook_router
+    app.include_router(github_webhook_router, prefix=settings.API_PREFIX)
 
     return app
 

@@ -243,4 +243,11 @@ def render_artifact(
     index[artifact_type] = ArtifactRef(version=version, artifact_id=artifact.id).model_dump()
     updated_state = apply_patch(state, {"artifacts_index": index})
 
+    # ── Trim old versions beyond the retention cap ─────────────────────────────
+    try:
+        from app.services.artifacts import cleanup_old_artifact_versions
+        cleanup_old_artifact_versions(db, project_id=state.project_id, artifact_type=artifact_type)
+    except Exception:
+        pass  # Never block artifact rendering on cleanup failure
+
     return artifact, updated_state

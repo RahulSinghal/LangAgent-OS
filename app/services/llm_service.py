@@ -23,6 +23,32 @@ from app.core.metrics import LLMUsage, get_run_collector
 _log = logging.getLogger(__name__)
 
 
+def _trim_to_budget(text: str, max_chars: int) -> str:
+    """Trim *text* to *max_chars* by keeping the start and end.
+
+    Preserves the first two-thirds and last one-third of the content so that
+    both the initial context (system description, requirements) and the most
+    recent messages are retained.  A visible ellipsis marker is inserted so
+    the LLM is aware that content was omitted.
+
+    Args:
+        text:      Original text (may be very long).
+        max_chars: Maximum character budget.
+
+    Returns:
+        Trimmed text, guaranteed to be at most *max_chars* characters
+        (including the ellipsis marker).
+    """
+    if len(text) <= max_chars:
+        return text
+    marker = "\n\n[…content trimmed to fit context window budget…]\n\n"
+    keep_end = max_chars // 3
+    keep_start = max_chars - keep_end - len(marker)
+    if keep_start <= 0:
+        return text[-max_chars:]
+    return text[:keep_start] + marker + text[-keep_end:]
+
+
 def call_llm(
     system_prompt: str,
     user_message: str,
@@ -50,6 +76,19 @@ def call_llm(
     # If using Gemini, prefer litellm's gemini/* model namespace.
     if provider in ("gemini", "google") and "/" not in model:
         model = f"gemini/{model}"
+
+    # ── Context budget trimming ────────────────────────────────────────────────
+    # Long-running projects accumulate large context that may exceed token limits.
+    # Trim user_message to stay within the configured character budget.
+    max_ctx = settings.LLM_CONTEXT_MAX_CHARS
+    if max_ctx > 0 and len(user_message) > max_ctx:
+        _log.warning(
+            "LLM context trimmed from %d to %d chars (model=%s)",
+            len(user_message),
+            max_ctx,
+            model,
+        )
+        user_message = _trim_to_budget(user_message, max_ctx)
 
     messages = [
         {"role": "system", "content": system_prompt},
