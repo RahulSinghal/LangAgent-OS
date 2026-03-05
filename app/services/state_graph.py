@@ -14,6 +14,7 @@ _PHASES: list[str] = [
     "prd",
     "commercials",
     "sow",
+    "user_guide",   # optional: ask user if they want a guide (after SOW, before coding)
     "coding",
     "milestone",
     "completed",
@@ -78,7 +79,7 @@ def get_project_state_graph(db: Session, project_id: int) -> dict:
     pending_approvals_by_type = {t: int(c) for (t, c) in pending_approvals}
 
     # latest artifacts by type (optional helper for UI)
-    artifact_types = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document"]
+    artifact_types = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document", "user_guide"]
     latest_artifacts: dict[str, dict] = {}
     for t in artifact_types:
         a: Artifact | None = (

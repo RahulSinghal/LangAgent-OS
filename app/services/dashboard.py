@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Approval, Artifact, Message, Project, Run, RunMetrics, Session as DbSession
 from app.services.eval_report import build_eval_report
+from app.services.snapshots import load_latest_snapshot
 
 
 def list_project_dashboard_rows(db: Session) -> list[dict]:
@@ -21,6 +22,7 @@ def list_project_dashboard_rows(db: Session) -> list[dict]:
         "server_details_client",
         "server_details_infra",
         "input_document",
+        "user_guide",
         "code",
     ]
 
@@ -75,10 +77,18 @@ def list_project_dashboard_rows(db: Session) -> list[dict]:
         current_state = None
         run_status = None
         latest_run_id = None
+        project_type = "generic"
         if latest_run is not None:
             latest_run_id = latest_run.id
             current_state = latest_run.current_node or latest_run.status
             run_status = latest_run.status
+            # Read project_type from the latest SoT snapshot
+            try:
+                sot = load_latest_snapshot(db, latest_run.id)
+                if sot is not None:
+                    project_type = getattr(sot, "project_type", "generic") or "generic"
+            except Exception:
+                pass
 
         try:
             report = build_eval_report(db, p.id)
@@ -99,6 +109,7 @@ def list_project_dashboard_rows(db: Session) -> list[dict]:
                 "latest_run_id": latest_run_id,
                 "current_state": current_state,
                 "run_status": run_status,
+                "project_type": project_type,
                 "pending_approvals": pending_approvals,
                 "artifacts": artifacts,
                 "tokens_spent": int(total_tokens or 0),

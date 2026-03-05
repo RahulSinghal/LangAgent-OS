@@ -300,6 +300,7 @@ async function refreshDashboard() {
       <thead>
         <tr>
           <th>Project</th>
+          <th>Type</th>
           <th>State</th>
           <th>Artifacts</th>
           <th>Approvals</th>
@@ -318,14 +319,15 @@ async function refreshDashboard() {
       tr.title = "Click to open project";
       const artifacts = r.artifacts || {};
 
-      const shownArtifactKeys = ["brd", "prd", "sow", "server_details_client", "server_details_infra", "input_document", "github_repo"]
+      const shownArtifactKeys = ["brd", "prd", "sow", "user_guide", "server_details_client", "server_details_infra", "input_document", "github_repo"]
         .filter((k) => artifacts[k])
         .slice(0, 5);
 
       const artifactHtml = shownArtifactKeys.length
         ? shownArtifactKeys.map((k) => {
             const a = artifacts[k];
-            return `<button class="linkBtn" data-artifact="${a.id}" data-title="${k} v${a.version}">${k}</button>`;
+            const label = k === "user_guide" ? "guide" : k;
+            return `<button class="linkBtn" data-artifact="${a.id}" data-title="${k} v${a.version}">${label}</button>`;
           }).join(" · ")
         : '<span class="subtle">—</span>';
 
@@ -337,9 +339,12 @@ async function refreshDashboard() {
       const stateLabel = r.current_state || "idle";
       const pcls = pillClass(r.run_status || r.current_state);
       const pending = Number(r.pending_approvals || 0);
+      const ptype = r.project_type || "generic";
+      const ptypeLabel = { rag_pipeline: "RAG", web_app: "Web", crm: "CRM", voice_chatbot: "Voice", generic: "—" }[ptype] || ptype;
 
       tr.innerHTML = `
         <td><strong>${escapeHtml(r.name)}</strong></td>
+        <td><span class="mono" style="font-size:11px">${escapeHtml(ptypeLabel)}</span></td>
         <td><span class="pill ${pcls}">${escapeHtml(stateLabel)}</span></td>
         <td class="mono" style="font-size:12px">${artifactHtml}</td>
         <td><span class="pill ${pending > 0 ? "pill-waiting" : ""}">${pending} pending</span></td>
@@ -769,16 +774,17 @@ const _GATE_PHASE_MAP = {
 
 // Phases with their display labels and whether they have a gate
 const _PHASE_CONFIG = [
-  { id: "init",        label: "INIT",      hasGate: false },
-  { id: "discovery",   label: "DISCOVERY", hasGate: false },
-  { id: "market_eval", label: "MKT EVAL",  hasGate: true  },
-  { id: "prd",         label: "PRD",       hasGate: true  },
-  { id: "commercials", label: "COMMERCIALS",hasGate: true  },
-  { id: "sow",         label: "SOW",       hasGate: true  },
-  { id: "coding",      label: "CODING",    hasGate: true  },
-  { id: "milestone",   label: "MILESTONE", hasGate: true  },
-  { id: "readiness",   label: "READINESS", hasGate: true  },
-  { id: "completed",   label: "DONE",      hasGate: false },
+  { id: "init",        label: "INIT",       hasGate: false },
+  { id: "discovery",   label: "DISCOVERY",  hasGate: false },
+  { id: "market_eval", label: "MKT EVAL",   hasGate: true  },
+  { id: "prd",         label: "PRD",        hasGate: true  },
+  { id: "commercials", label: "COMMERCIALS", hasGate: true  },
+  { id: "sow",         label: "SOW",        hasGate: true  },
+  { id: "user_guide",  label: "USER GUIDE", hasGate: false },
+  { id: "coding",      label: "CODING",     hasGate: true  },
+  { id: "milestone",   label: "MILESTONE",  hasGate: true  },
+  { id: "readiness",   label: "READINESS",  hasGate: true  },
+  { id: "completed",   label: "DONE",       hasGate: false },
 ];
 
 function renderWorkflowDiagram(graph) {
